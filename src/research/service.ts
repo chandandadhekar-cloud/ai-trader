@@ -10,6 +10,7 @@ import type { Settings } from '../config/settings.ts';
 import type { LlmClient } from './llm.ts';
 import { buildFactPack, type FactPackDeps } from './factPack.ts';
 import { runCascade, runDeterministic, type AgentRun } from './agents.ts';
+import { scopedLlm } from './llm.ts';
 import { verifyVerdict } from './verify.ts';
 import { mapVerdict } from './verdictMapper.ts';
 import { Calibrator, fitIsotonic, type IsotonicModel } from './calibration.ts';
@@ -61,9 +62,14 @@ export class ResearchService {
     this.bus.on('research.request', (r) => this.enqueue({ key: r.key, symbol: r.symbol, anomaly: r.anomaly, deep: r.deep, reason: r.reason }));
   }
 
+  /** Set by the agent controller: false when the agent is stopped (no AI spend). */
+  aiAllowed: () => boolean = () => true;
+  /** Set by the agent controller: false when the agent is stopped (no automatic research). */
+  autoResearch: () => boolean = () => true;
+
   private onAnomaly(a: Anomaly): void {
     const cfg = this.rc.get('research');
-    if (!cfg.enabled || a.suppressed) return;
+    if (!cfg.enabled || a.suppressed || !this.autoResearch()) return;
     // Never research stale anomalies (replays, warm-up, backfill): the drift window has passed.
     if (Date.now() - a.ts > 5 * 60_000) return;
     const hasPosition = !!this.deps.positionOf(a.key);
@@ -113,10 +119,12 @@ export class ResearchService {
     }
 
     let run: AgentRun;
+    const runId = newId('V');
     const spent = this.llm.usageToday().costUsd;
-    if (this.llm.available() && spent < this.s.LLM_MAX_USD_PER_DAY) {
+    const aiAllowed = this.aiAllowed();
+    if (this.llm.available() && spent < this.s.LLM_MAX_USD_PER_DAY && aiAllowed) {
       const deepAllowed = this.deepAllowed();
-      run = await runCascade(this.llm, pack, {
+      run = await runCascade(scopedLlm(this.llm, runId), pack, {
         fastModel: this.s.LLM_FAST_MODEL, deepModel: this.s.LLM_DEEP_MODEL,
         fastTimeoutMs: this.s.LLM_FAST_TIMEOUT_MS, deepTimeoutMs: this.s.LLM_DEEP_TIMEOUT_MS,
         fastEffort: this.s.LLM_FAST_EFFORT, deepEffort: this.s.LLM_DEEP_EFFORT,
@@ -125,7 +133,9 @@ export class ResearchService {
       if (run.path === 'deep') this.deepTimes.push(Date.now());
     } else {
       run = runDeterministic(pack);
-      if (this.llm.available()) run.trace.budget = `daily LLM spend cap $${this.s.LLM_MAX_USD_PER_DAY} reached`;
+      run.trace.shortCircuit = !this.llm.available()
+        ? 'no OpenAI key — rule-based researcher'
+        : aiAllowed ? `daily AI spend cap $${this.s.LLM_MAX_USD_PER_DAY} reached` : 'agent stopped — AI research off';
     }
     this.stats.byPath[run.path] = (this.stats.byPath[run.path] ?? 0) + 1;
 
@@ -139,7 +149,7 @@ export class ResearchService {
     });
     const now = Date.now();
     const rv: ResearchVerdict = {
-      id: newId('V'),
+      id: runId,
       key: j.key,
       symbol: j.symbol,
       anomalyId: j.anomaly?.id,
@@ -164,9 +174,15 @@ export class ResearchService {
       expiresAt: now + cfg.verdictTtlMin * 60_000,
     };
     const body = { ...rv, promptVersion: PROMPT_VERSION, factPack: { id: pack.id, buildMs: pack.buildMs, sources: pack.sources, pricedIn: pack.pricedIn, peers: pack.peers, move: pack.move, surveillance: pack.surveillance, sourceErrors: pack.sourceErrors }, claims: verified?.claims, trace: run.trace };
+    const tok = this.db.get<{ n: number; i: number; c: number; o: number; r: number; cost: number }>(
+      'SELECT COUNT(*) AS n, COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(cached_tokens),0) AS c, COALESCE(SUM(output_tokens),0) AS o, COALESCE(SUM(reasoning_tokens),0) AS r, COALESCE(SUM(cost_usd),0) AS cost FROM llm_calls WHERE run_id = ?', runId,
+    )!;
+    rv.costUsd = tok.cost;
+    const escalation = typeof run.trace.escalation === 'string' ? run.trace.escalation : typeof run.trace.shortCircuit === 'string' ? `rules: ${run.trace.shortCircuit}` : null;
     this.db.run(
-      'INSERT INTO verdicts (id, key, symbol, anomaly_id, ts, path, proposed, final, confidence, calibrated_confidence, direction, latency_ms, cost_usd, model, body) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      rv.id, rv.key, rv.symbol, rv.anomalyId ?? null, rv.ts, rv.path, rv.proposed, rv.final, rv.confidence, rv.calibratedConfidence, rv.direction, rv.latencyMs, rv.costUsd ?? 0, rv.model ?? null, JSON.stringify(body),
+      'INSERT INTO verdicts (id, key, symbol, anomaly_id, ts, path, proposed, final, confidence, calibrated_confidence, direction, latency_ms, cost_usd, model, body, trigger, escalation, llm_calls, input_tokens, cached_tokens, output_tokens, reasoning_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      rv.id, rv.key, rv.symbol, rv.anomalyId ?? null, rv.ts, rv.path, rv.proposed, rv.final, rv.confidence, rv.calibratedConfidence, rv.direction, rv.latencyMs, rv.costUsd ?? 0, rv.model ?? null, JSON.stringify({ ...body, costUsd: tok.cost }),
+      j.reason, escalation, tok.n, tok.i, tok.c, tok.o, tok.r,
     );
     this.db.run('INSERT OR REPLACE INTO research_cache (cache_key, verdict_id, created_at) VALUES (?,?,?)', pack.sourceHash, rv.id, now);
     if (j.anomaly) this.db.run('UPDATE anomalies SET researched = 1 WHERE id = ?', j.anomaly.id);

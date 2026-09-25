@@ -47,6 +47,8 @@ import { sessionState } from './config/calendar.ts';
 import { bandDistance } from './surveillance/bands.ts';
 import type { MetaModel } from './ml/metaLabel.ts';
 import { createLogger } from './core/logger.ts';
+import { AgentControl } from './engine/agentControl.ts';
+import { SettingsStore } from './config/settingsStore.ts';
 
 const log = createLogger('app');
 
@@ -88,6 +90,8 @@ export class App {
   readonly loop: DecisionLoop;
   readonly tax: TaxLedger;
   readonly alerts: AlertRouter;
+  readonly agent: AgentControl;
+  readonly settingsStore: SettingsStore;
   synthetic?: SyntheticMarket;
   metaModel?: MetaModel;
   readonly startedAt = Date.now();
@@ -105,6 +109,8 @@ export class App {
     this.trials = new TrialRegistry(this.db);
     this.tax = new TaxLedger(this.db);
     this.alerts = new AlertRouter(this.bus, s);
+    this.agent = new AgentControl(this.db, this.bus, this.audit, s.MODE === 'live' ? 'paused' : 'running');
+    this.settingsStore = new SettingsStore(this.db, s.DB_PATH, this.audit);
     const synthetic = s.DATA_SOURCE === 'synthetic';
 
     this.bars = new BarBuilder((b) => this.onBar(b));
@@ -115,7 +121,7 @@ export class App {
     this.paperPortfolio = new Portfolio(this.db, this.quotes, this.refdata, 'paper', s.CAPITAL_INR);
     if (s.MODE === 'live') this.livePortfolio = new Portfolio(this.db, this.quotes, this.refdata, 'live', s.CAPITAL_INR);
     // Risk is evaluated against the book that will carry the trade; live when present.
-    this.risk = new RiskEngine({ portfolio: this.livePortfolio ?? this.paperPortfolio, quotes: this.quotes, kill: this.kill, refdata: this.refdata, limits: () => this.rc.get('risk') });
+    this.risk = new RiskEngine({ portfolio: this.livePortfolio ?? this.paperPortfolio, quotes: this.quotes, kill: this.kill, refdata: this.refdata, limits: () => this.rc.get('risk'), trading: () => this.rc.get('trading') });
 
     this.throttle = new OrderThrottle(s.OPS_HARD_LIMIT, s.OPS_ALERT_AT, Date.now, (ops) =>
       this.bus.publish('alert', { severity: 'P1', title: 'Order rate high', message: `${ops} orders/sec (alert at ${s.OPS_ALERT_AT}, hard cap ${s.OPS_HARD_LIMIT}, exchange threshold 10)`, ts: Date.now() }),
@@ -179,6 +185,8 @@ export class App {
       },
     });
 
+    this.research.aiAllowed = () => this.agent.researchAllowed();
+    this.research.autoResearch = () => this.agent.researchAllowed();
     this.strategies = new StrategyRegistry(this.db, this.audit, this.trials, defaultStrategies());
     this.shadow = new ShadowTracker(this.db);
     this.monitor = new PositionMonitor({ oms: this.paperOms, refdata: this.refdata, quotes: this.quotes, bus: this.bus, research: this.research, staleness: this.staleness, alwaysOpen: synthetic });
@@ -190,7 +198,8 @@ export class App {
       bus: this.bus, db: this.db, quotes: this.quotes, staleness: this.staleness, refdata: this.refdata, surveillance: this.surveillance,
       rc: this.rc, risk: this.risk, paperOms: this.paperOms, liveOms: this.liveOms, strategies: this.strategies, shadow: this.shadow,
       research: this.research, metaModel: () => this.metaModel, liveHealthy: this.liveOms ? () => this.compliance.status().liveReady : undefined,
-      alwaysOpen: synthetic, now: Date.now, universe: () => this.tradableUniverse(), recentAnomalies: (key, since) => this.recentAnomalies(key, since),
+      alwaysOpen: synthetic, entriesAllowed: () => this.agent.entriesAllowed(), leverageFor: (inst) => this.risk.leverageFor(inst),
+      now: Date.now, universe: () => this.tradableUniverse(), recentAnomalies: (key, since) => this.recentAnomalies(key, since),
     });
 
     this.bus.on('fill', () => this.metrics.inc('tradeai_fills_total', 'Fills'));
@@ -360,8 +369,10 @@ export class App {
   }
 
   /** Called after the daily Upstox login completes. */
-  async onUpstoxLogin(): Promise<void> {
+  async onUpstoxLogin(token?: string): Promise<void> {
     this.audit.append('admin', 'upstox.login', null, {});
+    // Keep the day's token (encrypted) so restarts and paper/live switches keep the session.
+    if (token) this.settingsStore.save({ UPSTOX_ACCESS_TOKEN: token }, 'system');
     if (this.feed) {
       await this.feed.start();
       this.sweeper?.start();
@@ -429,6 +440,7 @@ export class App {
     if (this.upstox?.hasToken() && p.hh === 23 && p.mm === 45) {
       try {
         await this.upstox.logout();
+        this.settingsStore.save({ UPSTOX_ACCESS_TOKEN: null }, 'system');
         this.compliance.lastLogoutAt = Date.now();
         this.audit.append('system', 'upstox.logout', null, {});
       } catch (e) {

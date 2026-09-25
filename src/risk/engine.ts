@@ -8,7 +8,7 @@
 //   open-risk budget → cost/tax-aware minimum edge.
 
 import type { Instrument, Signal } from '../core/types.ts';
-import type { RiskLimits } from '../config/runtime.ts';
+import { TradingConfigSchema, type RiskLimits, type TradingConfig } from '../config/runtime.ts';
 import type { Portfolio } from '../oms/portfolio.ts';
 import type { QuoteBook } from '../marketdata/quoteBook.ts';
 import type { KillSwitch } from './killSwitch.ts';
@@ -32,9 +32,11 @@ export class RiskEngine {
   private kill: KillSwitch;
   private refdata: InstrumentRegistry;
   private limits: () => RiskLimits;
+  private trading: () => TradingConfig;
   private strategyLosses = new Map<string, { date: string; consecutive: number; paused: boolean }>();
 
-  constructor(opts: { portfolio: Portfolio; quotes: QuoteBook; kill: KillSwitch; refdata: InstrumentRegistry; limits: () => RiskLimits }) {
+  constructor(opts: { portfolio: Portfolio; quotes: QuoteBook; kill: KillSwitch; refdata: InstrumentRegistry; limits: () => RiskLimits; trading?: () => TradingConfig }) {
+    this.trading = opts.trading ?? (() => TradingConfigSchema.parse({}));
     this.portfolio = opts.portfolio;
     this.quotes = opts.quotes;
     this.kill = opts.kill;
@@ -69,7 +71,16 @@ export class RiskEngine {
     return Object.fromEntries(this.strategyLosses);
   }
 
-  size(sig: Signal, inst: Instrument, gate: GateResult, metaSize: number, now: number, date: string): SizingDecision {
+  /** Leverage an instrument trades at under the current trade settings (1 = cash). */
+  leverageFor(inst: Instrument): number {
+    const T = this.trading();
+    if (!T.leverageEnabled) return 1;
+    if (inst.venue === 'DELTA') return T.cryptoLeverage;
+    if (inst.type === 'EQ') return T.equityIntradayLeverage;
+    return 1; // F&O: exchange SPAN margin already applies; no extra leverage
+  }
+
+  size(sig: Signal, inst: Instrument, gate: GateResult, metaSize: number, now: number, date: string, leverage = 1): SizingDecision {
     const L = this.limits();
     const reasons: string[] = [];
     const checks: SizingDecision['checks'] = {};
@@ -104,12 +115,37 @@ export class RiskEngine {
     const perUnitRisk = Math.abs(sig.entry - sig.stop);
     if (!(perUnitRisk > 0)) return reject('invalid stop distance');
     const equity = this.portfolio.equity();
-    const riskBudget = equity * L.riskPerTrade * gate.sizeMultiplier * metaSize;
+    const T = this.trading();
+    const lev = Math.max(1, leverage);
     checks.equity = equity;
-    checks.riskBudget = riskBudget;
+    checks.leverage = lev;
+    checks.sizingMode = T.sizingMode;
     checks.metaSize = metaSize;
     checks.gateSize = gate.sizeMultiplier;
-    let qty = Math.floor(riskBudget / perUnitRisk);
+
+    // Liquidation guard: with leverage the stop must sit well inside the liquidation price,
+    // otherwise the position can be liquidated before the stop ever triggers.
+    if (lev > 1) {
+      const liqDist = Math.max(0, 1 / lev - T.maintenanceMargin);
+      const stopDist = perUnitRisk / sig.entry;
+      checks.liquidationDistancePct = liqDist * 100;
+      checks.stopDistancePct = stopDist * 100;
+      if (stopDist > liqDist / T.liquidationBuffer) {
+        return reject(`stop ${(stopDist * 100).toFixed(2)}% away is too wide for ${lev}x (liquidation ≈ ${(liqDist * 100).toFixed(2)}% away; stop must be within 1/${T.liquidationBuffer} of it)`);
+      }
+    }
+
+    // Sizing. Risk mode: loss at the stop = riskPerTrade of equity. Margin mode: commit a
+    // share of equity as margin at the chosen leverage. Both are capped by the hard
+    // max-loss-per-trade at the stop.
+    const riskBudget = equity * L.riskPerTrade * gate.sizeMultiplier * metaSize;
+    let qty = T.sizingMode === 'margin'
+      ? Math.floor((equity * T.marginPerTradePct * lev * gate.sizeMultiplier * metaSize) / sig.entry)
+      : Math.floor(riskBudget / perUnitRisk);
+    checks.riskBudget = T.sizingMode === 'risk' ? riskBudget : undefined;
+    const hardLossQty = Math.floor((equity * T.maxLossPerTradePct) / perUnitRisk);
+    if (hardLossQty < qty) reasons.push(`max-loss-per-trade cap ${hardLossQty} (< ${qty})`);
+    qty = Math.min(qty, hardLossQty);
 
     // Participation cap: <= maxParticipation of the typical 1-minute volume.
     const vols = this.quotes.bars(sig.instrumentKey, 30).map((b) => b.volume).sort((a, b) => a - b);
@@ -121,11 +157,19 @@ export class RiskEngine {
       qty = Math.min(qty, capQty);
     }
 
-    const notionalCap = Math.floor((equity * L.maxPositionNotional) / sig.entry);
+    // Leverage raises the buying-power ceilings (notional, gross exposure) and the
+    // margin actually available; it does not change the loss at the stop.
+    const notionalCap = Math.floor((equity * L.maxPositionNotional * lev) / sig.entry);
     if (notionalCap < qty) reasons.push(`notional cap ${notionalCap}`);
     qty = Math.min(qty, notionalCap);
 
-    const grossRoom = Math.floor((equity * L.maxGrossExposure - this.portfolio.grossExposure()) / sig.entry);
+    const marginFree = equity - this.portfolio.marginUsed();
+    checks.marginFree = marginFree;
+    const marginRoom = Math.floor((Math.max(0, marginFree) * lev) / sig.entry);
+    if (marginRoom < qty) reasons.push(`available margin room ${marginRoom}`);
+    qty = Math.min(qty, marginRoom);
+
+    const grossRoom = Math.floor((equity * L.maxGrossExposure * lev - this.portfolio.grossExposure()) / sig.entry);
     if (grossRoom < qty) reasons.push(`gross exposure room ${Math.max(0, grossRoom)}`);
     qty = Math.min(qty, Math.max(0, grossRoom));
 

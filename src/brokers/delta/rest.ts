@@ -175,6 +175,11 @@ export class DeltaClient implements Broker {
     this.fillCbs.push(cb);
   }
 
+  /** Order leverage for a product (Delta sets leverage per product, not per order). */
+  async setLeverage(instrumentKey: string, leverage: number): Promise<void> {
+    await this.call('POST', `/v2/products/${this.productId(instrumentKey)}/orders/leverage`, {}, { leverage: String(leverage) });
+  }
+
   /** Refresh the venue-side cancel-after (dead-man) timer. */
   async heartbeat(): Promise<void> {
     if (!this.configured()) return;

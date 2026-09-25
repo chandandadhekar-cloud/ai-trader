@@ -61,6 +61,21 @@ test('API: login required, CSRF header enforced, health public', async () => {
     assert.equal(view.fields.find((f: { key: string }) => f.key === 'OPENAI_API_KEY').isSet, true);
     assert.equal(view.fields.find((f: { key: string }) => f.key === 'TELEGRAM_CHAT_ID').value, '42');
     assert.equal((await fetch(`${base}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ values: { OPS_HARD_LIMIT: 20 } }) })).status, 400);
+    // Agent control and the guarded live switch.
+    await fetch(`${base}/api/killswitch`, { method: 'POST', headers: H, body: JSON.stringify({ engage: false, reason: 'test done' }) });
+    const ag = await (await fetch(`${base}/api/agent`, { method: 'POST', headers: H, body: JSON.stringify({ status: 'paused', reason: 'test' }) })).json();
+    assert.equal(ag.status, 'paused');
+    const live = await fetch(`${base}/api/system/mode`, { method: 'POST', headers: H, body: JSON.stringify({ mode: 'live', confirmation: 'ENABLE LIVE' }) });
+    assert.equal(live.status, 409); // preflight fails without Upstox, static IP, login...
+    const tr = await fetch(`${base}/api/config/trading`, { method: 'PUT', headers: H, body: JSON.stringify({ leverageEnabled: true, cryptoLeverage: 25 }) });
+    assert.equal((await tr.json()).cryptoLeverage, 25);
+    assert.equal((await fetch(`${base}/api/config/trading`, { method: 'PUT', headers: H, body: JSON.stringify({ equityIntradayLeverage: 25 }) })).status, 400);
+    const act = await (await fetch(`${base}/api/activity?types=control`, { headers: { Cookie: cookie } })).json();
+    assert.ok(act.some((i: { title: string }) => i.title === 'agent.paused'));
+    const usage = await (await fetch(`${base}/api/ai/usage?days=7`, { headers: { Cookie: cookie } })).json();
+    assert.equal(usage.totals.today.calls, 0);
+    const pipe = await (await fetch(`${base}/api/pipeline/today`, { headers: { Cookie: cookie } })).json();
+    assert.ok('anomalies' in pipe && 'ai' in pipe);
   } finally {
     await srv.close();
     await app.stop();

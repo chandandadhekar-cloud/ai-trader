@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import type { App } from '../app.ts';
 import { AuthService } from './auth.ts';
 import { loadSettings, redactedSettings } from '../config/settings.ts';
-import { SettingsStore } from '../config/settingsStore.ts';
 import { recentLogs } from '../core/logger.ts';
 import { sessionState, NSE_HOLIDAYS, SPECIAL_SESSIONS, CAS_LIVE_DATE, NEW_PREOPEN_DATE } from '../config/calendar.ts';
-import { istParts, istDate } from '../core/clock.ts';
+import { istParts, istDate, istToEpoch } from '../core/clock.ts';
+import { usageReport } from '../research/llm.ts';
 import { fyOf } from '../analytics/taxLedger.ts';
 import type { StrategyStage } from '../core/types.ts';
 import { newId } from '../core/ids.ts';
@@ -77,7 +77,7 @@ interface BacktestJob {
 export function startServer(app: App, opts: { restart?: () => Promise<void> } = {}): { close: () => Promise<void>; port: number } {
   const s = app.s;
   const auth = new AuthService(app.db, s.ADMIN_USER, s.ADMIN_PASSWORD_HASH, s.SESSION_TTL_HOURS, s.DB_PATH);
-  const settingsStore = new SettingsStore(app.db, s.DB_PATH, app.audit);
+  const settingsStore = app.settingsStore;
   let restartPending = false;
   const routes: Route[] = [];
   const jobs = new Map<string, BacktestJob>();
@@ -134,6 +134,8 @@ export function startServer(app: App, opts: { restart?: () => Promise<void> } = 
         ...(app.livePortfolio ? { live: { equity: r.equity, drawdown: r.drawdown, dayPnlPct: r.dayPnlPct, cash: app.livePortfolio.cash, realized: app.livePortfolio.realized, unrealized: app.livePortfolio.unrealized(), fees: app.livePortfolio.feesPaid, openPositions: app.livePortfolio.open().length, openRisk: app.livePortfolio.openRisk(), grossExposure: app.livePortfolio.grossExposure(), startingCapital: app.livePortfolio.startingCapital } } : {}),
       },
       killSwitch: app.kill.get(),
+      agent: app.agent.get(),
+      trading: { ...app.rc.get('trading'), marginUsed: (app.livePortfolio ?? app.paperPortfolio).marginUsed() },
       compliance: app.compliance.status(),
       reconcile: { paper: { ok: app.paperOms.reconciled, last: app.paperOms.lastReconcile }, live: app.liveOms ? { ok: app.liveOms.reconciled, last: app.liveOms.lastReconcile } : undefined },
       loop: app.loop.stats,
@@ -216,14 +218,105 @@ export function startServer(app: App, opts: { restart?: () => Promise<void> } = 
   });
   add('GET', '/api/config', () => app.rc.all());
   add('PUT', '/api/config/:name', (c) => {
-    const name = c.params.name as 'risk' | 'scanner' | 'research';
-    if (!['risk', 'scanner', 'research'].includes(name)) throw new HttpError(404, 'unknown config');
+    const name = c.params.name as 'risk' | 'scanner' | 'research' | 'trading';
+    if (!['risk', 'scanner', 'research', 'trading'].includes(name)) throw new HttpError(404, 'unknown config');
     try {
       return app.rc.update(name, c.body, actor(c));
     } catch (e) {
       throw new HttpError(400, String((e as Error).message));
     }
   });
+  // ---- agent control ----------------------------------------------------------------
+  add('GET', '/api/agent', () => app.agent.get());
+  add('POST', '/api/agent', async (c) => {
+    const status = String(c.body.status) as 'running' | 'paused' | 'stopped';
+    if (!['running', 'paused', 'stopped'].includes(status)) throw new HttpError(400, 'status must be running, paused or stopped');
+    if (status === 'running' && app.kill.engaged()) throw new HttpError(409, `kill switch is engaged (${app.kill.get().reason}); disengage it first`);
+    if (status === 'running' && s.MODE === 'live' && !app.compliance.status().liveReady) throw new HttpError(409, `live prerequisites missing: ${app.compliance.status().blockers.join('; ')}`);
+    const st = app.agent.set(status, actor(c), String(c.body.reason || 'manual'));
+    if (status === 'stopped' && c.body.flatten) {
+      await app.paperOms.flattenAll('agent stopped with flatten');
+      if (app.liveOms) await app.liveOms.flattenAll('agent stopped with flatten');
+    }
+    return st;
+  });
+
+  // ---- paper ↔ live switch ------------------------------------------------------------
+  const livePreflight = async () => {
+    await app.compliance.checkEgressIp();
+    const eff = loadSettings(process.env, undefined, settingsStore.overrides());
+    const checks = [
+      { name: 'Upstox API key, secret and redirect URI saved', ok: !!(eff.UPSTOX_API_KEY && eff.UPSTOX_API_SECRET && eff.UPSTOX_REDIRECT_URI), fix: 'Settings → Upstox broker' },
+      { name: 'Algo Name (X-Algo-Name) saved', ok: !!eff.UPSTOX_ALGO_NAME, fix: 'Settings → Upstox broker' },
+      { name: 'Primary static IP saved', ok: !!eff.STATIC_IP_PRIMARY, fix: 'Settings → Static IP & order limits' },
+      { name: 'This server’s egress IP matches a registered IP', ok: (() => { const ip = app.compliance.status().egressIp; return !!ip && [eff.STATIC_IP_PRIMARY, eff.STATIC_IP_SECONDARY].filter(Boolean).includes(ip); })(), fix: 'Run on the VPS whose IP is registered with Upstox' },
+      { name: 'Today’s Upstox login completed', ok: !!app.upstox?.hasToken(), fix: 'Compliance → Daily Upstox login' },
+      { name: 'Real market data (not synthetic)', ok: eff.DATA_SOURCE === 'upstox', fix: 'Settings → Market data source = upstox' },
+      { name: 'Kill switch disengaged', ok: !app.kill.engaged(), fix: 'Dashboard → disengage kill switch' },
+      { name: 'At least one strategy promoted to live', ok: app.strategies.list().some((x) => x.stage === 'live'), fix: 'Strategies → set a validated strategy to live' },
+    ];
+    return { ready: checks.every((x) => x.ok), checks, egressIp: app.compliance.status().egressIp };
+  };
+  add('GET', '/api/system/mode', async () => ({ mode: s.MODE, liveTradingEnabled: s.LIVE_TRADING_ENABLED, preflight: await livePreflight() }));
+  add('POST', '/api/system/mode', async (c) => {
+    const target = String(c.body.mode);
+    if (target !== 'paper' && target !== 'live') throw new HttpError(400, 'mode must be paper or live');
+    if (target === 'live') {
+      const pf = await livePreflight();
+      if (!pf.ready) throw new HttpError(409, `cannot switch to live: ${pf.checks.filter((x) => !x.ok).map((x) => x.name).join('; ')}`);
+      if (c.body.confirmation !== 'ENABLE LIVE') throw new HttpError(400, 'Type ENABLE LIVE to confirm');
+      settingsStore.save({ MODE: 'live', LIVE_TRADING_ENABLED: true }, actor(c), 'ENABLE LIVE');
+      // First live session always starts paused: trading begins only on an explicit Start.
+      app.agent.set('paused', actor(c), 'switched to live — press Start when ready');
+    } else {
+      settingsStore.save({ MODE: 'paper', LIVE_TRADING_ENABLED: false }, actor(c));
+    }
+    app.audit.append(actor(c), `system.mode.${target}`, null, {});
+    if (opts.restart) setTimeout(() => void opts.restart!(), 300);
+    return { ok: true, mode: target, restarting: !!opts.restart };
+  });
+
+  // ---- AI usage & research runs --------------------------------------------------------
+  add('GET', '/api/ai/usage', (c) => ({ ...usageReport(app.db, Math.min(Math.max(num(c.url.searchParams.get('days'), 30), 1), 365)), llmAvailable: app.llm.available(), fastModel: s.LLM_FAST_MODEL, deepModel: s.LLM_DEEP_MODEL, dailyCapUsd: s.LLM_MAX_USD_PER_DAY, dailyCallCap: s.LLM_MAX_CALLS_PER_DAY, agent: app.agent.get() }));
+  add('GET', '/api/ai/calls', (c) => {
+    const run = c.url.searchParams.get('run');
+    return run
+      ? app.db.all('SELECT * FROM llm_calls WHERE run_id = ? ORDER BY ts', run)
+      : app.db.all('SELECT * FROM llm_calls ORDER BY ts DESC LIMIT ?', num(c.url.searchParams.get('limit'), 200));
+  });
+
+  // ---- activity timeline & today's pipeline ------------------------------------------------
+  add('GET', '/api/activity', (c) => {
+    const before = num(c.url.searchParams.get('before'), Date.now() + 1);
+    const limit = Math.min(num(c.url.searchParams.get('limit'), 150), 500);
+    const types = new Set((c.url.searchParams.get('types') || 'anomaly,research,signal,order,fill,control,alert').split(','));
+    const sym = (c.url.searchParams.get('symbol') || '').toUpperCase();
+    const symOf = (key: string) => app.refdata.byKey(key)?.symbol ?? key.split('|').pop()!.replace(/^SYN:/, '');
+    const items: { ts: number; type: string; symbol?: string; title: string; detail?: string; status?: string; id?: string; costUsd?: number }[] = [];
+    if (types.has('anomaly')) for (const r of app.db.all<Record<string, any>>('SELECT id, ts, symbol, type, severity, suppressed, researched FROM anomalies WHERE ts < ? ORDER BY ts DESC LIMIT ?', before, limit)) items.push({ ts: r.ts, type: 'anomaly', symbol: r.symbol, title: `${r.type.replaceAll('_', ' ')} · severity ${Math.round(r.severity)}`, status: r.suppressed ? 'index-driven' : r.researched ? 'researched' : 'logged', id: r.id });
+    if (types.has('research')) for (const r of app.db.all<Record<string, any>>('SELECT id, ts, symbol, path, final, direction, calibrated_confidence, cost_usd, escalation, trigger FROM verdicts WHERE ts < ? ORDER BY ts DESC LIMIT ?', before, limit)) items.push({ ts: r.ts, type: 'research', symbol: r.symbol, title: `Verdict ${r.final} · ${r.direction} · conf ${Number(r.calibrated_confidence).toFixed(2)}`, detail: `${r.path}${r.escalation ? ` — ${r.escalation}` : ''} · trigger ${r.trigger ?? 'anomaly'}`, status: r.final, id: r.id, costUsd: r.cost_usd });
+    if (types.has('signal')) for (const r of app.db.all<Record<string, any>>('SELECT id, ts, strategy_id, instrument_key, side, decision, reasons FROM signals WHERE ts < ? ORDER BY ts DESC LIMIT ?', before, limit)) items.push({ ts: r.ts, type: 'signal', symbol: symOf(r.instrument_key), title: `${r.strategy_id} ${r.side} → ${r.decision}`, detail: (JSON.parse(r.reasons ?? '[]') as string[]).join('; '), status: r.decision });
+    if (types.has('order')) for (const r of app.db.all<Record<string, any>>('SELECT client_order_id, created_at, instrument_key, side, qty, filled_qty, order_type, purpose, status, reason, mode, price FROM orders WHERE created_at < ? ORDER BY created_at DESC LIMIT ?', before, limit)) items.push({ ts: r.created_at, type: 'order', symbol: symOf(r.instrument_key), title: `${r.mode.toUpperCase()} ${r.purpose} ${r.side} ${r.filled_qty}/${r.qty} ${r.order_type}${r.price ? ` @ ${r.price}` : ''}`, detail: r.reason ?? undefined, status: r.status, id: r.client_order_id });
+    if (types.has('fill')) for (const r of app.db.all<Record<string, any>>('SELECT ts, instrument_key, side, qty, price, fees, mode FROM fills WHERE ts < ? ORDER BY ts DESC LIMIT ?', before, limit)) items.push({ ts: r.ts, type: 'fill', symbol: symOf(r.instrument_key), title: `${r.mode.toUpperCase()} fill ${r.side} ${r.qty} @ ${r.price}`, detail: `charges ₹${Number(r.fees).toFixed(2)}` });
+    if (types.has('control')) for (const r of app.db.all<Record<string, any>>("SELECT ts, actor, action, entity FROM audit_log WHERE ts < ? AND (action LIKE 'agent.%' OR action LIKE 'killswitch.%' OR action LIKE 'settings.%' OR action LIKE 'config.%' OR action LIKE 'system.%' OR action LIKE 'strategy.%' OR action LIKE 'upstox.%' OR action LIKE 'reconcile%') ORDER BY id DESC LIMIT ?", before, limit)) items.push({ ts: r.ts, type: 'control', title: r.action, detail: `by ${r.actor}${r.entity ? ` · ${r.entity}` : ''}` });
+    if (types.has('alert')) for (const e of app.bus.history('alert', 500)) if (e.ts < before) items.push({ ts: e.ts, type: 'alert', title: `${e.data.severity}: ${e.data.title}`, detail: e.data.message, status: e.data.severity });
+    return items.filter((i) => !sym || i.symbol === sym).sort((a, b) => b.ts - a.ts).slice(0, limit);
+  });
+  add('GET', '/api/pipeline/today', () => {
+    const start = istToEpoch(istDate(Date.now()), 0, 0);
+    const one = <T>(sql: string) => app.db.get<T>(sql, start)!;
+    return {
+      anomalies: one<{ n: number; researched: number; suppressed: number }>('SELECT COUNT(*) AS n, COALESCE(SUM(researched),0) AS researched, COALESCE(SUM(suppressed),0) AS suppressed FROM anomalies WHERE ts >= ?'),
+      verdicts: app.db.all<{ final: string; n: number }>('SELECT final, COUNT(*) AS n FROM verdicts WHERE ts >= ? GROUP BY final', start),
+      researchPaths: app.db.all<{ path: string; n: number; cost: number }>('SELECT path, COUNT(*) AS n, COALESCE(SUM(cost_usd),0) AS cost FROM verdicts WHERE ts >= ? GROUP BY path', start),
+      signals: app.db.all<{ decision: string; n: number }>('SELECT decision, COUNT(*) AS n FROM signals WHERE ts >= ? GROUP BY decision', start),
+      orders: app.db.all<{ mode: string; status: string; n: number }>('SELECT mode, status, COUNT(*) AS n FROM orders WHERE created_at >= ? GROUP BY mode, status', start),
+      fills: one<{ n: number; fees: number }>('SELECT COUNT(*) AS n, COALESCE(SUM(fees),0) AS fees FROM fills WHERE ts >= ?'),
+      trades: (() => { const t = (app.livePortfolio ?? app.paperPortfolio).closedTrades.filter((x) => x.ts >= start); return { n: t.length, netPnl: t.reduce((a, x) => a + x.netPnl, 0), wins: t.filter((x) => x.netPnl > 0).length }; })(),
+      ai: one<{ calls: number; cost: number; input: number; output: number }>('SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(input_tokens),0) AS input, COALESCE(SUM(output_tokens),0) AS output FROM llm_calls WHERE ts >= ?'),
+    };
+  });
+
   // ---- console-managed settings (API keys etc.) ---------------------------------
   add('GET', '/api/settings', () => ({
     fields: settingsStore.view(),
@@ -351,7 +444,13 @@ export function startServer(app: App, opts: { restart?: () => Promise<void> } = 
   add('GET', '/api/anomalies/stats', () => app.db.all(`SELECT type, COUNT(*) AS n, AVG(severity) AS avgSeverity,
       AVG(CASE WHEN fwd_ret_5m IS NOT NULL THEN fwd_ret_5m END) AS avgFwd5m, AVG(CASE WHEN fwd_ret_30m IS NOT NULL THEN fwd_ret_30m END) AS avgFwd30m,
       SUM(CASE WHEN fwd_ret_30m IS NOT NULL THEN 1 ELSE 0 END) AS labelled, SUM(suppressed) AS suppressed FROM anomalies GROUP BY type ORDER BY n DESC`));
-  add('GET', '/api/verdicts', (c) => app.db.all<Record<string, any>>('SELECT id, key, symbol, anomaly_id, ts, path, proposed, final, confidence, calibrated_confidence, direction, latency_ms, cost_usd, model, outcome_ret, outcome_correct FROM verdicts ORDER BY ts DESC LIMIT ?', num(c.url.searchParams.get('limit'), 100)));
+  add('GET', '/api/verdicts', (c) => {
+    const f = c.url.searchParams.get('final');
+    const cols = 'id, key, symbol, anomaly_id, ts, path, proposed, final, confidence, calibrated_confidence, direction, latency_ms, cost_usd, model, outcome_ret, outcome_correct, trigger, escalation, llm_calls, input_tokens, cached_tokens, output_tokens, reasoning_tokens';
+    return f
+      ? app.db.all<Record<string, any>>(`SELECT ${cols} FROM verdicts WHERE final = ? ORDER BY ts DESC LIMIT ?`, f, num(c.url.searchParams.get('limit'), 200))
+      : app.db.all<Record<string, any>>(`SELECT ${cols} FROM verdicts ORDER BY ts DESC LIMIT ?`, num(c.url.searchParams.get('limit'), 200));
+  });
   add('GET', '/api/verdicts/:id', (c) => {
     const r = app.db.get<{ body: string; outcome_ret: number | null; outcome_correct: number | null }>('SELECT body, outcome_ret, outcome_correct FROM verdicts WHERE id = ?', c.params.id);
     if (!r) throw new HttpError(404, 'not found');
@@ -424,8 +523,8 @@ export function startServer(app: App, opts: { restart?: () => Promise<void> } = 
     oauthStates.delete(st);
     if (!exp || exp < Date.now()) throw new HttpError(403, 'invalid or expired OAuth state; start the login from the Compliance page');
     if (!code || !app.upstox) throw new HttpError(400, 'missing code or Upstox not configured');
-    await app.upstox.exchangeCode(code);
-    await app.onUpstoxLogin();
+    const token = await app.upstox.exchangeCode(code);
+    await app.onUpstoxLogin(token);
     app.audit.append('admin', 'upstox.oauth_callback', null, { ip: c.ip });
     c.res.writeHead(302, { Location: '/#/compliance' });
     c.res.end();

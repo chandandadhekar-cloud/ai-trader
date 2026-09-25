@@ -23,6 +23,8 @@ export interface PositionState {
   protectiveOrderId?: string;
   protectiveConfirmed: boolean;
   entryFees: number;
+  /** Leverage the position was opened with (margin = notional / leverage). */
+  leverage: number;
 }
 
 export function feeFor(inst: Instrument, product: ProductType, side: 'BUY' | 'SELL', price: number, qty: number, ts: number, maker = false): { total: number; tds: number } {
@@ -93,13 +95,13 @@ export class Portfolio {
     this.persist(p);
   }
 
-  applyFill(f: Fill, strategyId: string, product: ProductType, levels?: { stop?: number; target?: number; timeStopMin?: number }): { closedQty: number; pnl: number } {
+  applyFill(f: Fill, strategyId: string, product: ProductType, levels?: { stop?: number; target?: number; timeStopMin?: number; leverage?: number }): { closedQty: number; pnl: number } {
     const inst = this.refdata.byKey(f.instrumentKey);
     const signed = f.side === 'BUY' ? f.qty : -f.qty;
     const k = this.pk(f.instrumentKey, strategyId);
     let p = this.positions.get(k);
     if (!p) {
-      p = { instrumentKey: f.instrumentKey, strategyId, qty: 0, avgPrice: 0, realizedPnl: 0, openedAt: f.ts, product, protectiveConfirmed: false, entryFees: 0 };
+      p = { instrumentKey: f.instrumentKey, strategyId, qty: 0, avgPrice: 0, realizedPnl: 0, openedAt: f.ts, product, protectiveConfirmed: false, entryFees: 0, leverage: 1 };
       this.positions.set(k, p);
     }
     this.cash -= signed * f.price + f.fees;
@@ -112,6 +114,7 @@ export class Portfolio {
         p.entryFees = 0;
         p.protectiveConfirmed = false;
         p.protectiveOrderId = undefined;
+        p.leverage = Math.max(1, levels?.leverage ?? 1);
         if (levels) {
           p.stopPrice = levels.stop;
           p.targetPrice = levels.target;
@@ -188,6 +191,13 @@ export class Portfolio {
     return r;
   }
 
+  /** Margin blocked by open positions (notional / leverage). */
+  marginUsed(): number {
+    let m = 0;
+    for (const p of this.positions.values()) if (p.qty) m += Math.abs(p.qty * (this.mark(p.instrumentKey) ?? p.avgPrice)) / (p.leverage || 1);
+    return m;
+  }
+
   equity(): number {
     // Cash already includes the cost of open positions; add their market value.
     let mv = 0;
@@ -214,11 +224,11 @@ export class Portfolio {
 
   private persist(p: PositionState): void {
     this.db.run(
-      `INSERT INTO positions (instrument_key, strategy_id, qty, avg_price, realized_pnl, opened_at, stop_price, target_price, time_stop_at, protective_order_id, protective_confirmed, mode, product)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(instrument_key, strategy_id, mode) DO UPDATE SET qty=excluded.qty, avg_price=excluded.avg_price,
+      `INSERT INTO positions (instrument_key, strategy_id, qty, avg_price, realized_pnl, opened_at, stop_price, target_price, time_stop_at, protective_order_id, protective_confirmed, mode, product, leverage)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(instrument_key, strategy_id, mode) DO UPDATE SET qty=excluded.qty, avg_price=excluded.avg_price,
        realized_pnl=excluded.realized_pnl, opened_at=excluded.opened_at, stop_price=excluded.stop_price, target_price=excluded.target_price,
-       time_stop_at=excluded.time_stop_at, protective_order_id=excluded.protective_order_id, protective_confirmed=excluded.protective_confirmed, product=excluded.product`,
-      p.instrumentKey, p.strategyId, p.qty, p.avgPrice, p.realizedPnl, p.openedAt, p.stopPrice ?? null, p.targetPrice ?? null, p.timeStopAt ?? null, p.protectiveOrderId ?? null, p.protectiveConfirmed ? 1 : 0, this.mode, p.product,
+       time_stop_at=excluded.time_stop_at, protective_order_id=excluded.protective_order_id, protective_confirmed=excluded.protective_confirmed, product=excluded.product, leverage=excluded.leverage`,
+      p.instrumentKey, p.strategyId, p.qty, p.avgPrice, p.realizedPnl, p.openedAt, p.stopPrice ?? null, p.targetPrice ?? null, p.timeStopAt ?? null, p.protectiveOrderId ?? null, p.protectiveConfirmed ? 1 : 0, this.mode, p.product, p.leverage || 1,
     );
     const st = { cash: this.cash, feesPaid: this.feesPaid, realized: this.realized, peakEquity: this.peakEquity, startingCapital: this.startingCapital };
     this.db.run("INSERT INTO kv_settings (key, value, updated_at, updated_by) VALUES (?,?,?, 'system') ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", `portfolio_${this.mode}`, JSON.stringify(st), Date.now());
@@ -238,7 +248,7 @@ export class Portfolio {
       this.positions.set(this.pk(r.instrument_key, r.strategy_id), {
         instrumentKey: r.instrument_key, strategyId: r.strategy_id, qty: r.qty, avgPrice: r.avg_price, realizedPnl: r.realized_pnl, openedAt: r.opened_at,
         product: (r.product ?? 'I') as ProductType, stopPrice: r.stop_price ?? undefined, targetPrice: r.target_price ?? undefined, timeStopAt: r.time_stop_at ?? undefined,
-        protectiveOrderId: r.protective_order_id ?? undefined, protectiveConfirmed: !!r.protective_confirmed, entryFees: 0,
+        protectiveOrderId: r.protective_order_id ?? undefined, protectiveConfirmed: !!r.protective_confirmed, entryFees: 0, leverage: r.leverage ?? 1,
       });
     }
   }

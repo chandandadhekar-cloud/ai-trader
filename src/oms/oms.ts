@@ -44,7 +44,7 @@ export interface OmsOrder {
   parentId?: string;
   reason?: string;
   createdAt: number;
-  levels?: { stop?: number; target?: number; timeStopMin?: number };
+  levels?: { stop?: number; target?: number; timeStopMin?: number; leverage?: number };
 }
 
 export interface ReconcileReport {
@@ -167,15 +167,23 @@ export class Oms {
   }
 
   /** Submit an approved entry. Returns undefined if no price is available. */
-  async submitEntry(sig: Signal, qty: number, inst: Instrument, product: ProductType = 'I'): Promise<OmsOrder | undefined> {
+  async submitEntry(sig: Signal, qty: number, inst: Instrument, product: ProductType = 'I', leverage = 1): Promise<OmsOrder | undefined> {
     const px = this.marketablePrice(inst, sig.side);
     if (!px) return undefined;
+    if (leverage > 1 && this.broker.setLeverage) {
+      try {
+        await this.broker.setLeverage(inst.key, leverage);
+      } catch (e) {
+        log.warn('set leverage failed; entry skipped', { key: inst.key, leverage, err: String(e) });
+        return { clientOrderId: Oms.clientOrderIdFor(sig), strategyId: sig.strategyId, instrumentKey: sig.instrumentKey, side: sig.side, qty, filledQty: 0, type: 'LIMIT', product, status: 'REJECTED', purpose: 'entry', createdAt: this.now(), reason: `could not set ${leverage}x leverage: ${String((e as Error).message ?? e)}` };
+      }
+    }
     const o: OmsOrder = {
       clientOrderId: Oms.clientOrderIdFor(sig), strategyId: sig.strategyId, instrumentKey: sig.instrumentKey, side: sig.side, qty, filledQty: 0,
       type: 'LIMIT', price: px, product, status: 'PENDING_NEW', purpose: 'entry', createdAt: this.now(),
-      levels: { stop: sig.stop, target: sig.target, timeStopMin: sig.timeStopMin },
+      levels: { stop: sig.stop, target: sig.target, timeStopMin: sig.timeStopMin, leverage },
     };
-    this.audit.append('oms', 'order.entry', o.clientOrderId, { sig: { ...sig }, qty, price: px, algoName: this.algoName, mode: this.mode });
+    this.audit.append('oms', 'order.entry', o.clientOrderId, { sig: { ...sig }, qty, price: px, leverage, algoName: this.algoName, mode: this.mode });
     const sent = await this.send(o);
     // Cancel any unfilled remainder after the entry timeout.
     if (this.useTimers) setTimeout(() => {

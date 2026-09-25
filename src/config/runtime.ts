@@ -61,7 +61,36 @@ export const ResearchConfigSchema = z.object({
 });
 export type ResearchConfig = z.infer<typeof ResearchConfigSchema>;
 
+// Trade settings: leverage and sizing mode. Leverage raises buying power; the
+// stop-loss still bounds the loss on every trade (see risk/engine.ts).
+export const TradingConfigSchema = z.object({
+  /** Master switch: when off every trade uses 1x (cash) regardless of the values below. */
+  leverageEnabled: z.boolean().default(false),
+  /**
+   * Equity intraday (MIS) leverage. Under SEBI peak-margin rules brokers allow at
+   * most 5x on equity intraday; Upstox sets the exact per-stock figure.
+   */
+  equityIntradayLeverage: z.number().min(1).max(5).default(1),
+  /** Crypto perpetuals on Delta Exchange India (set per product on the exchange). */
+  cryptoLeverage: z.number().min(1).max(100).default(1),
+  /**
+   * risk   = size from the stop distance (risk-per-trade from Risk config); leverage only raises the ceiling.
+   * margin = size = equity x marginPerTradePct x leverage, still capped by maxLossPerTradePct at the stop.
+   */
+  sizingMode: z.enum(['risk', 'margin']).default('risk'),
+  /** Margin mode: share of equity committed as margin per trade. */
+  marginPerTradePct: z.number().min(0.01).max(1).default(0.1),
+  /** Hard cap on the loss at the stop for any single trade (both modes). */
+  maxLossPerTradePct: z.number().min(0.001).max(0.05).default(0.02),
+  /** Stop must sit at most 1/buffer of the way to the liquidation price. */
+  liquidationBuffer: z.number().min(1.5).max(10).default(3),
+  /** Maintenance margin rate used for the liquidation estimate. */
+  maintenanceMargin: z.number().min(0).max(0.2).default(0.005),
+});
+export type TradingConfig = z.infer<typeof TradingConfigSchema>;
+
 const DEFS = {
+  trading: TradingConfigSchema,
   risk: RiskLimitsSchema,
   scanner: ScannerConfigSchema,
   research: ResearchConfigSchema,
@@ -107,6 +136,6 @@ export class RuntimeConfig {
   }
 
   all(): Record<Name, unknown> {
-    return { risk: this.get('risk'), scanner: this.get('scanner'), research: this.get('research') };
+    return { trading: this.get('trading'), risk: this.get('risk'), scanner: this.get('scanner'), research: this.get('research') };
   }
 }

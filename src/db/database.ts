@@ -248,6 +248,36 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE positions ADD COLUMN product TEXT NOT NULL DEFAULT 'I';
   `,
+  `
+  ALTER TABLE positions ADD COLUMN leverage REAL NOT NULL DEFAULT 1;
+  ALTER TABLE llm_usage ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE llm_usage ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    model TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    run_id TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    ok INTEGER NOT NULL DEFAULT 1,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS llm_calls_ts ON llm_calls(ts);
+  CREATE INDEX IF NOT EXISTS llm_calls_run ON llm_calls(run_id);
+  ALTER TABLE verdicts ADD COLUMN trigger TEXT;
+  ALTER TABLE verdicts ADD COLUMN escalation TEXT;
+  ALTER TABLE verdicts ADD COLUMN llm_calls INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE verdicts ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE verdicts ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE verdicts ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE verdicts ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export class Db {

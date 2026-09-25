@@ -35,6 +35,8 @@ export interface Broker {
   getPositions(): Promise<BrokerPositionState[]>;
   onOrderUpdate(cb: (u: BrokerOrderState) => void): void;
   onFill(cb: (f: Omit<Fill, 'fees'>) => void): void;
+  /** Optional: set the venue leverage for an instrument before entry (Delta). */
+  setLeverage?(instrumentKey: string, leverage: number): Promise<void>;
   /** Optional dead-man heartbeat (Delta cancel-after). */
   heartbeat?(): Promise<void>;
   /** Last request headers, kept for compliance verification in paper mode. */

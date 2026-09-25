@@ -208,7 +208,9 @@ export function barChart(el, bars, opts = {}) {
   const H = opts.height || 220;
   const m = { l: 56, r: 8, t: 10, b: 44 };
   const vals = bars.map((b) => b.value);
-  const ticks = niceTicks(Math.min(0, ...vals), Math.max(0, ...vals));
+  const lo = Math.min(0, ...vals);
+  const hi = Math.max(0, ...vals);
+  const ticks = niceTicks(lo, lo === 0 && hi === 0 ? 1 : hi);
   const y0 = ticks[0], y1 = ticks[ticks.length - 1];
   const sy = (y) => m.t + (1 - (y - y0) / Math.max(y1 - y0, 1e-12)) * (H - m.t - m.b);
   const bw = (W - m.l - m.r) / bars.length;

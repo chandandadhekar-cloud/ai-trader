@@ -8,8 +8,8 @@ const ICON = {
 };
 
 const NAV = [
-  ['dashboard', 'Dashboard'], ['trading', 'Positions & orders'], ['scanner', 'Scanner'], ['research', 'Research'],
-  ['strategies', 'Strategies'], ['risk', 'Risk & config'], ['validation', 'Validation'], ['sep'],
+  ['dashboard', 'Dashboard'], ['activity', 'Activity'], ['trading', 'Positions & orders'], ['scanner', 'Scanner'], ['research', 'Research'],
+  ['ai', 'AI usage & cost'], ['strategies', 'Strategies'], ['trade-settings', 'Trade settings'], ['risk', 'Risk & config'], ['validation', 'Validation'], ['sep'],
   ['surveillance', 'Surveillance'], ['compliance', 'Compliance'], ['tax', 'Tax & P&L'], ['audit', 'Audit & logs'], ['settings', 'Settings'],
 ];
 
@@ -63,7 +63,7 @@ function renderShell() {
     <div class="main">
       <header class="topbar">
         <button class="menu-btn ghost" id="menu-btn" aria-label="Menu">☰</button>
-        <span id="top-mode"></span><span id="top-session"></span><span id="top-kill"></span>
+        <span id="top-agent"></span><span id="top-mode"></span><span id="top-session"></span><span id="top-kill"></span>
         <span class="spacer"></span>
         <span class="mono muted hide-sm" id="top-clock"></span>
         <button class="ghost sm" id="theme-btn" aria-label="Toggle theme">◐</button>
@@ -94,7 +94,10 @@ function startStream() {
   es.addEventListener('overview', (e) => {
     state.overview = JSON.parse(e.data);
     renderTopbar();
-    if (state.page === 'dashboard') updateDashboard();
+    if (state.page === 'dashboard') {
+      updateDashboard();
+      if (!state.lastPipeline || Date.now() - state.lastPipeline > 15000) { state.lastPipeline = Date.now(); renderPipeline(); }
+    }
   });
   for (const topic of ['anomaly', 'research.verdict', 'signal', 'order.update', 'fill', 'alert', 'killswitch', 'risk.event', 'system']) {
     es.addEventListener(topic, (e) => {
@@ -111,7 +114,11 @@ function startStream() {
 function renderTopbar() {
   const o = state.overview;
   if (!o) return;
-  $('#top-mode').innerHTML = html`${badge(o.mode === 'live' ? 'LIVE' : 'PAPER', o.mode === 'live' ? 'crit' : 'info')} ${o.dataSource === 'synthetic' ? badge('SYNTHETIC DATA', 'warn') : badge('Upstox data', 'good')}`.__raw;
+  const ag = o.agent?.status ?? 'running';
+  $('#top-agent').innerHTML = html`<button class="sm ${ag === 'running' ? '' : 'primary'}" id="top-agent-btn" title="Agent control">${raw(`<span class="dot ${ag === 'running' ? 'good' : ag === 'paused' ? 'warn' : 'crit'}"></span>`)} Agent ${ag.toUpperCase()}</button>`.__raw;
+  $('#top-agent-btn').onclick = () => agentDialog();
+  $('#top-mode').innerHTML = html`<button class="sm ${o.mode === 'live' ? 'danger' : ''}" id="top-mode-btn" title="Switch paper / live">${o.mode === 'live' ? 'LIVE TRADING' : 'PAPER TRADING'} ⇄</button> ${o.dataSource === 'synthetic' ? badge('SYNTHETIC DATA', 'warn') : badge('Upstox data', 'good')}`.__raw;
+  $('#top-mode-btn').onclick = () => modeDialog();
   const ph = o.session.equity;
   $('#top-session').innerHTML = o.dataSource === 'synthetic'
     ? html`${badge('SIMULATED SESSION', 'good')}`.__raw
@@ -159,6 +166,11 @@ async function pageDashboard(el) {
       <button class="danger" id="kill-btn">Engage kill switch</button></div>
     <div id="dash-banners"></div>
     <div class="kpis" id="dash-kpis"></div>
+    <div class="grid g3" style="margin-bottom:14px">
+      <div class="card" id="agent-card"></div>
+      <div class="card" id="mode-card"></div>
+      <div class="card"><h2>Today's pipeline</h2><div id="pipeline"></div></div>
+    </div>
     <div class="grid g21">
       <div class="card"><h2>Equity (paper book)</h2><div id="eq-chart"></div></div>
       <div class="card"><h2>System health</h2><ul class="health-list" id="health"></ul></div>
@@ -181,6 +193,7 @@ async function pageDashboard(el) {
   }
   renderFeed();
   updateDashboard();
+  renderPipeline();
   const eq = await api('/api/equity?since=' + (Date.now() - 3 * 86400_000));
   lineChart($('#eq-chart'), eq.map((r) => ({ x: r.ts, y: r.equity })), { yFmt: (v) => fmt.inr(v), label: 'Paper equity', xTick: (x) => fmt.time(x), tipFmt: (v) => fmt.inr2(v) });
   const pos = await api('/api/positions');
@@ -195,9 +208,121 @@ async function pageDashboard(el) {
   ], pos, { empty: 'No open positions.' }).__raw;
 }
 
+async function renderPipeline() {
+  const el = $('#pipeline');
+  if (!el) return;
+  const p = await api('/api/pipeline/today');
+  const vd = Object.fromEntries(p.verdicts.map((v) => [v.final, v.n]));
+  const sg = Object.fromEntries(p.signals.map((v) => [v.decision, v.n]));
+  const rows = [
+    ['Anomalies detected', p.anomalies.n, `${p.anomalies.suppressed} index-driven`],
+    ['Researched', p.anomalies.researched, p.researchPaths.map((r) => `${r.path} ${r.n}`).join(' · ') || '—'],
+    ['Verdicts', p.verdicts.reduce((a, v) => a + v.n, 0), ['REACT', 'FADE', 'PROTECT', 'BLOCK', 'IGNORE', 'UNCERTAIN'].filter((k) => vd[k]).map((k) => `${k} ${vd[k]}`).join(' · ') || '—'],
+    ['Signals', (sg.accepted ?? 0) + (sg.rejected ?? 0) + (sg.shadow ?? 0), `${sg.accepted ?? 0} accepted · ${sg.rejected ?? 0} rejected · ${sg.shadow ?? 0} shadow`],
+    ['Orders', p.orders.reduce((a, v) => a + v.n, 0), p.orders.map((o) => `${o.mode} ${o.status.toLowerCase()} ${o.n}`).join(' · ') || '—'],
+    ['Fills', p.fills.n, `charges ₹${fmt.num(p.fills.fees, 0)}`],
+    ['Closed trades', p.trades.n, raw(`<span class="${fmt.cls(p.trades.netPnl)}">${esc(fmt.inr(p.trades.netPnl))}</span> · ${p.trades.wins} wins`)],
+    ['AI spend', `$${fmt.num(p.ai.cost, 4)}`, `${p.ai.calls} calls · ${fmt.int(p.ai.input + p.ai.output)} tokens`],
+  ];
+  el.innerHTML = html`<ul class="health-list">${rows.map(([n, v, d]) => html`<li><span class="name">${n}<div class="muted" style="font-size:12px">${d}</div></span><b>${v}</b></li>`)}</ul>`.__raw;
+}
+
+const AGENT_TEXT = {
+  running: 'Scanning, researching with AI and placing new trades. Open positions are managed.',
+  paused: 'No new trades. Scanner and AI research continue; open positions stay protected (stops, targets, square-off).',
+  stopped: 'No new trades and no AI research (zero AI spend). Scanner keeps logging; open positions stay protected.',
+};
+
+function renderAgentCards() {
+  const o = state.overview;
+  const ac = $('#agent-card');
+  if (!o || !ac) return;
+  const ag = o.agent;
+  ac.innerHTML = html`<h2>Trading agent</h2>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span class="dot ${ag.status === 'running' ? 'good' : ag.status === 'paused' ? 'warn' : 'crit'}" style="width:12px;height:12px"></span><b style="font-size:18px">${ag.status.toUpperCase()}</b><span class="muted">since ${fmt.ago(ag.since)} · by ${ag.by}</span></div>
+    <p class="secondary" style="margin-top:0">${AGENT_TEXT[ag.status]}</p>
+    <div class="toolbar"><button class="primary" data-agent="running" ${raw(ag.status === 'running' ? 'disabled' : '')}>▶ Start</button><button data-agent="paused" ${raw(ag.status === 'paused' ? 'disabled' : '')}>⏸ Pause</button><button class="danger" data-agent="stopped" ${raw(ag.status === 'stopped' ? 'disabled' : '')}>■ Stop</button></div>`.__raw;
+  $$('[data-agent]', ac).forEach((b) => (b.onclick = () => setAgent(b.dataset.agent)));
+  const mc = $('#mode-card');
+  mc.innerHTML = html`<h2>Trading mode</h2>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">${badge(o.mode === 'live' ? 'LIVE — REAL MONEY' : 'PAPER — SIMULATED', o.mode === 'live' ? 'crit' : 'info')}</div>
+    <p class="secondary" style="margin-top:0">${o.mode === 'live' ? 'Orders go to Upstox with real money. Switch back to paper at any time.' : 'Orders are simulated against live or synthetic prices. Switching to live runs a safety checklist first.'}</p>
+    <div class="toolbar"><button class="${o.mode === 'live' ? '' : 'danger'}" id="mode-card-btn">${o.mode === 'live' ? 'Switch to paper' : 'Switch to live…'}</button></div>
+    <div class="muted" style="font-size:12px">Leverage: ${o.trading.leverageEnabled ? `on — equity ${o.trading.equityIntradayLeverage}x · crypto ${o.trading.cryptoLeverage}x` : 'off (1x)'} · margin used ${fmt.inr(o.trading.marginUsed)} · <a href="#/trade-settings">trade settings</a></div>`.__raw;
+  $('#mode-card-btn').onclick = () => modeDialog();
+}
+
+async function setAgent(status, flatten = false) {
+  let reason = 'manual';
+  if (status === 'stopped') {
+    const d = drawer(html`<h2>Stop the agent</h2><p class="secondary">${AGENT_TEXT.stopped}</p>
+      <form id="stop-form" class="stack"><label class="field">Reason<input name="reason" value="manual stop"></label>
+      <label><input type="checkbox" name="flatten"> Also close all open positions now</label>
+      <button class="danger">Stop agent</button></form>`);
+    $('#stop-form', d).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      await act(() => post('/api/agent', { status: 'stopped', reason: f.get('reason'), flatten: f.get('flatten') === 'on' }), 'Agent stopped');
+      closeDrawer();
+      refreshOverview();
+    });
+    return;
+  }
+  await act(() => post('/api/agent', { status, reason, flatten }), status === 'running' ? 'Agent started' : 'Agent paused');
+  refreshOverview();
+}
+
+async function refreshOverview() {
+  try { state.overview = await api('/api/overview'); renderTopbar(); if (state.page === 'dashboard') updateDashboard(); } catch { /* ignore */ }
+}
+
+function agentDialog() {
+  const ag = state.overview?.agent?.status;
+  const d = drawer(html`<h2>Trading agent: ${ag?.toUpperCase()}</h2>
+    ${['running', 'paused', 'stopped'].map((s) => html`<div class="card" style="margin-bottom:10px"><b>${s === 'running' ? '▶ Running' : s === 'paused' ? '⏸ Paused' : '■ Stopped'}</b><p class="secondary" style="margin:6px 0">${AGENT_TEXT[s]}</p><button class="${s === 'stopped' ? 'danger' : s === 'running' ? 'primary' : ''} sm" data-agent2="${s}" ${raw(s === ag ? 'disabled' : '')}>${s === 'running' ? 'Start' : s === 'paused' ? 'Pause' : 'Stop…'}</button></div>`)}`);
+  $$('[data-agent2]', d).forEach((b) => (b.onclick = () => { closeDrawer(); setAgent(b.dataset.agent2); }));
+}
+
+async function modeDialog() {
+  const cur = state.overview?.mode;
+  if (cur === 'live') {
+    if (!confirm('Switch back to PAPER trading? Live orders stop; the app restarts in paper mode. Open live positions stay at the broker with their stops — close them first if you want to be flat.')) return;
+    await act(() => post('/api/system/mode', { mode: 'paper' }), 'Switching to paper…');
+    return waitForRestart();
+  }
+  const d = drawer(html`<h2>Switch to LIVE trading</h2><div class="empty">Running safety checklist…</div>`);
+  let m;
+  try { m = await api('/api/system/mode'); } catch (e) { d.innerHTML = html`<div class="banner crit">${e.message}</div>`.__raw; return; }
+  const pf = m.preflight;
+  d.innerHTML = html`<button class="close ghost" aria-label="Close">✕</button><h2>Switch to LIVE trading</h2>
+    <p class="secondary">Real orders with real money. Every check must pass. After switching, the agent starts <b>paused</b>; you press Start when ready.</p>
+    <ul class="health-list">${pf.checks.map((c) => html`<li><span class="dot ${c.ok ? 'good' : 'crit'}"></span><span class="name">${c.name}${c.ok ? '' : html`<div class="muted" style="font-size:12px">Fix: ${c.fix}</div>`}</span>${c.ok ? badge('OK', 'good') : badge('Missing', 'crit')}</li>`)}</ul>
+    ${pf.ready ? html`<form id="live-form" class="stack" style="margin-top:12px"><label class="field">Type <b>ENABLE LIVE</b> to confirm<input name="c" autocomplete="off"></label><button class="danger">Switch to live and restart</button></form>` : html`<div class="banner warn" style="margin-top:12px">Resolve the missing items above, then try again.</div>`}`.__raw;
+  d.querySelector('.close').onclick = closeDrawer;
+  $('#live-form', d)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const c = new FormData(e.target).get('c');
+    await act(() => post('/api/system/mode', { mode: 'live', confirmation: c }), 'Switching to live…');
+    closeDrawer();
+    waitForRestart();
+  });
+}
+
+async function waitForRestart() {
+  state.es?.close();
+  const page = $('#page');
+  if (page) page.innerHTML = '<div class="empty">Restarting with the new mode…</div>';
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok && i > 1) { boot(); return; } } catch { /* restarting */ }
+  }
+  toast('Server did not come back within 60 s; check the logs', true);
+}
+
 function updateDashboard() {
   const o = state.overview;
   if (!o || !$('#dash-kpis')) return;
+  renderAgentCards();
   const b = o.books.live ?? o.books.paper;
   const book = o.books.live ? 'live' : 'paper';
   $('#dash-kpis').innerHTML = html`
@@ -383,7 +508,9 @@ async function pageScanner(el) {
 // research
 
 async function pageResearch(el) {
-  const [rows, cal] = await Promise.all([api('/api/verdicts?limit=200'), api('/api/research/calibration')]);
+  const rq = new URLSearchParams(location.hash.split('?')[1] || '');
+  const finalFilter = rq.get('final') || '';
+  const [rows, cal] = await Promise.all([api(`/api/verdicts?limit=300${finalFilter ? `&final=${finalFilter}` : ''}`), api('/api/research/calibration')]);
   const o = state.overview;
   el.innerHTML = html`<div class="page-head"><h1>“Why is it moving” research</h1></div>
     <div class="kpis">
@@ -400,7 +527,8 @@ async function pageResearch(el) {
       <div class="card"><h2>Calibration: hit rate by stated confidence</h2><div id="cal-chart"></div>
         <div class="toolbar" style="margin-top:8px"><button class="sm" id="refit">Refit isotonic calibration</button></div></div>
     </div>
-    <div class="card" style="margin-top:14px"><h2>Verdicts</h2><div id="vd"></div></div>`.__raw;
+    <div class="card" style="margin-top:14px"><div class="page-head" style="margin-bottom:8px"><h2 style="margin:0">Research runs & verdicts</h2><span class="spacer"></span>
+      <div class="seg">${['', 'REACT', 'FADE', 'PROTECT', 'BLOCK', 'IGNORE', 'UNCERTAIN'].map((f) => raw(`<a class="btn ${f === finalFilter ? 'on' : ''}" href="#/research${f ? `?final=${f}` : ''}">${f || 'All'}</a>`))}</div></div><div id="vd"></div></div>`.__raw;
   $('#rs-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -412,12 +540,16 @@ async function pageResearch(el) {
     { label: 'Time', render: (v) => fmt.dt(v.ts) }, { label: 'Symbol', render: (v) => html`<b>${v.symbol}</b>` },
     { label: 'Final', render: (v) => verdictBadge(v.final) }, { label: 'Proposed', render: (v) => html`<span class="muted">${v.proposed}</span>` },
     { label: 'Dir', key: 'direction' }, { label: 'Conf (cal.)', render: (v) => `${fmt.num(v.confidence, 2)} (${fmt.num(v.calibrated_confidence, 2)})`, num: true },
-    { label: 'Path', key: 'path' }, { label: 'Latency', render: (v) => `${fmt.num(v.latency_ms / 1000, 1)}s`, num: true },
-    { label: 'Cost', render: (v) => (v.cost_usd ? `$${fmt.num(v.cost_usd, 4)}` : '—'), num: true },
+    { label: 'Trigger', render: (v) => v.trigger || 'anomaly' },
+    { label: 'Path', render: (v) => html`${v.path}${v.escalation ? html`<div class="muted" style="font-size:11.5px;max-width:260px;white-space:normal">${v.escalation}</div>` : ''}` },
+    { label: 'AI calls', render: (v) => fmt.int(v.llm_calls), num: true },
+    { label: 'Tokens in / out', render: (v) => (v.llm_calls ? `${fmt.int(v.input_tokens)} / ${fmt.int(v.output_tokens)}` : '—'), num: true },
+    { label: 'Latency', render: (v) => `${fmt.num(v.latency_ms / 1000, 1)}s`, num: true },
+    { label: 'Cost', render: (v) => (v.cost_usd ? `$${fmt.num(v.cost_usd, 5)}` : '$0'), num: true },
     { label: 'Outcome', render: (v) => (v.outcome_correct === null || v.outcome_correct === undefined ? '—' : v.outcome_correct ? badge('correct', 'good') : badge('wrong', 'crit')) },
   ], rows, { onRow: true, empty: 'No verdicts yet. High-severity anomalies are researched automatically.' }).__raw;
-  bindRows($('#vd'), rows, async (v) => {
-    const b = await api(`/api/verdicts/${v.id}`);
+  const openRun = async (v) => {
+    const [b, calls] = await Promise.all([api(`/api/verdicts/${v.id}`), api(`/api/ai/calls?run=${v.id}`)]);
     const src = b.factPack?.sources || [];
     drawer(html`<h2>${b.symbol} ${verdictBadge(b.final)}</h2>
       <p>${b.causeSummary}</p>
@@ -432,8 +564,17 @@ async function pageResearch(el) {
         { label: 'vs move', render: (s) => `${s.minutesRelativeToMove > 0 ? '+' : ''}${s.minutesRelativeToMove} min` }, { label: 'Title', key: 'title', wrap: true },
       ], src, { empty: 'No sources found for this symbol.' })}
       ${b.unknowns?.length ? html`<h3>Unknowns</h3><ul>${b.unknowns.map((u) => html`<li>${u}</li>`)}</ul>` : ''}
+      <h3>AI calls in this run</h3>${calls.length ? table([
+        { label: 'Step', key: 'purpose' }, { label: 'Model', key: 'model' }, { label: 'In', render: (r) => fmt.int(r.input_tokens), num: true },
+        { label: 'Cached', render: (r) => fmt.int(r.cached_tokens), num: true }, { label: 'Out', render: (r) => fmt.int(r.output_tokens), num: true },
+        { label: 'Reasoning', render: (r) => fmt.int(r.reasoning_tokens), num: true }, { label: 'Cost', render: (r) => `$${fmt.num(r.cost_usd, 5)}`, num: true },
+        { label: 'Latency', render: (r) => `${fmt.num(r.latency_ms / 1000, 1)}s`, num: true }, { label: '', render: (r) => (r.ok ? '' : badge('error', 'crit')) },
+      ], calls) : html`<p class="muted">No AI calls: ${b.trace?.shortCircuit ? `decided by rules (${b.trace.shortCircuit})` : b.trace?.budget || 'rule-based researcher'} — $0.</p>`}
+      <p><b>Total AI cost for this run: $${fmt.num(calls.reduce((a, c) => a + c.cost_usd, 0), 5)}</b></p>
       <details><summary>Raw trace</summary><pre class="json">${JSON.stringify(b.trace || {}, null, 2)}</pre></details>`);
-  });
+  };
+  bindRows($('#vd'), rows, openRun);
+  if (rq.get('run')) openRun({ id: rq.get('run') }).catch((e) => toast(e.message, true));
 }
 
 // ---------------------------------------------------------------------------
@@ -793,8 +934,155 @@ async function restartApp() {
   toast('Server did not come back within 60 s; check the logs', true);
 }
 
+
+// ---------------------------------------------------------------------------
+// trade settings (leverage & sizing)
+
+async function pageTradeSettings(el) {
+  const cfg = (await api('/api/config')).trading;
+  const o = state.overview;
+  const equity = (o?.books.live ?? o?.books.paper)?.equity ?? 1000000;
+  el.innerHTML = html`<div class="page-head"><h1>Trade settings</h1></div>
+    <div class="banner warn"><b>How leverage works here.</b> Leverage raises buying power: bigger positions for less margin. Every trade still has a broker-side stop, and the loss at the stop stays capped by <b>Max loss per trade</b>. Leverage magnifies gaps, slippage and fees. With it on, a stop too close to the liquidation price blocks the trade.</div>
+    <form class="card" id="ts-form"><div class="form-grid">
+      <label class="field">Use leverage<select name="leverageEnabled"><option value="false" ${raw(!cfg.leverageEnabled ? 'selected' : '')}>Off — every trade at 1x (default)</option><option value="true" ${raw(cfg.leverageEnabled ? 'selected' : '')}>On — apply the leverage below to all trades</option></select><span class="muted" style="font-size:11.5px">Master switch for all trades.</span></label>
+      <label class="field">Equity intraday leverage (x)<input name="equityIntradayLeverage" type="number" min="1" max="5" step="0.5" value="${cfg.equityIntradayLeverage}"><span class="muted" style="font-size:11.5px">NSE/BSE intraday (MIS). SEBI peak-margin rules cap equity intraday at <b>5x</b>; Upstox sets the exact per-stock figure.</span></label>
+      <label class="field">Crypto leverage (x)<input name="cryptoLeverage" type="number" min="1" max="100" step="1" value="${cfg.cryptoLeverage}"><span class="muted" style="font-size:11.5px">Delta Exchange India perpetuals (1–100x; e.g. 25x). Set on the exchange before each entry.</span></label>
+      <label class="field">Position sizing<select name="sizingMode"><option value="risk" ${raw(cfg.sizingMode === 'risk' ? 'selected' : '')}>Risk-based (recommended): size from the stop distance</option><option value="margin" ${raw(cfg.sizingMode === 'margin' ? 'selected' : '')}>Margin-based: commit a share of equity × leverage</option></select><span class="muted" style="font-size:11.5px">Risk-based loses at most the risk-per-trade (Risk & config) at the stop; leverage only raises the ceiling.</span></label>
+      <label class="field">Margin per trade (% of equity)<input name="marginPerTradePct" type="number" min="1" max="100" step="1" value="${Math.round(cfg.marginPerTradePct * 100)}"><span class="muted" style="font-size:11.5px">Margin-based sizing only.</span></label>
+      <label class="field">Max loss per trade (% of equity)<input name="maxLossPerTradePct" type="number" min="0.1" max="5" step="0.1" value="${+(cfg.maxLossPerTradePct * 100).toFixed(2)}"><span class="muted" style="font-size:11.5px">Hard cap on the loss at the stop, in every mode.</span></label>
+      <label class="field">Liquidation safety buffer (x)<input name="liquidationBuffer" type="number" min="1.5" max="10" step="0.5" value="${cfg.liquidationBuffer}"><span class="muted" style="font-size:11.5px">Stop must be within 1/buffer of the distance to liquidation.</span></label>
+      <label class="field">Maintenance margin (%)<input name="maintenanceMargin" type="number" min="0" max="20" step="0.1" value="${+(cfg.maintenanceMargin * 100).toFixed(2)}"><span class="muted" style="font-size:11.5px">Used for the liquidation estimate.</span></label>
+    </div><div class="toolbar" style="margin-top:12px"><button class="primary">Save trade settings</button><span class="muted">Applies to the next trade; no restart needed. Recorded in the audit log.</span></div></form>
+    <div class="card" style="margin-top:14px"><h2>What a trade would look like</h2>
+      <div class="toolbar"><label class="field">Entry price<input id="calc-px" type="number" value="1000" style="width:120px"></label><label class="field">Stop distance (%)<input id="calc-stop" type="number" value="1" step="0.1" style="width:120px"></label><label class="field">Market<select id="calc-mkt"><option value="eq">Equity intraday</option><option value="crypto">Crypto</option></select></label></div>
+      <div id="calc-out"></div></div>`.__raw;
+  const form = $('#ts-form');
+  const read = () => {
+    const f = Object.fromEntries(new FormData(form));
+    return {
+      leverageEnabled: f.leverageEnabled === 'true', equityIntradayLeverage: +f.equityIntradayLeverage, cryptoLeverage: +f.cryptoLeverage, sizingMode: f.sizingMode,
+      marginPerTradePct: +f.marginPerTradePct / 100, maxLossPerTradePct: +f.maxLossPerTradePct / 100, liquidationBuffer: +f.liquidationBuffer, maintenanceMargin: +f.maintenanceMargin / 100,
+    };
+  };
+  const riskPct = (await api('/api/config')).risk.riskPerTrade;
+  const calc = () => {
+    const t = read();
+    const px = +$('#calc-px').value || 1;
+    const stop = (+$('#calc-stop').value || 1) / 100;
+    const lev = t.leverageEnabled ? ($('#calc-mkt').value === 'crypto' ? t.cryptoLeverage : t.equityIntradayLeverage) : 1;
+    const liq = Math.max(0, 1 / lev - t.maintenanceMargin);
+    const blocked = lev > 1 && stop > liq / t.liquidationBuffer;
+    let notional = t.sizingMode === 'margin' ? equity * t.marginPerTradePct * lev : (equity * riskPct) / stop;
+    notional = Math.min(notional, (equity * t.maxLossPerTradePct) / stop, equity * lev);
+    const qty = Math.floor(notional / px);
+    const lossAtStop = qty * px * stop;
+    $('#calc-out').innerHTML = html`${blocked ? html`<div class="banner crit">Blocked: a ${fmt.num(stop * 100, 2)}% stop is too wide for ${lev}x. Liquidation is about ${fmt.num(liq * 100, 2)}% away; the stop must be within ${fmt.num((liq / t.liquidationBuffer) * 100, 2)}%.</div>` : ''}
+      <dl class="kv"><dt>Equity</dt><dd>${fmt.inr(equity)}</dd><dt>Leverage used</dt><dd>${lev}x</dd><dt>Quantity</dt><dd>${fmt.int(qty)}</dd><dt>Position size</dt><dd>${fmt.inr(qty * px)}</dd>
+      <dt>Margin blocked</dt><dd>${fmt.inr((qty * px) / lev)}</dd><dt>Loss if stopped out</dt><dd class="neg">${fmt.inr(lossAtStop)} (${fmt.pct(lossAtStop / equity)})</dd>
+      ${lev > 1 ? html`<dt>Approx. liquidation</dt><dd>${fmt.num(liq * 100, 2)}% from entry</dd>` : ''}</dl>
+      <p class="muted" style="font-size:12px">Illustration only. Participation, exposure and open-risk caps, fees and slippage also apply.</p>`.__raw;
+  };
+  for (const e of $$('input, select', el)) e.addEventListener('input', calc);
+  calc();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const t = read();
+    if (t.leverageEnabled && (t.cryptoLeverage >= 10 || t.equityIntradayLeverage >= 5) && !confirm(`High leverage (${t.cryptoLeverage}x crypto / ${t.equityIntradayLeverage}x equity). Small adverse moves can cause large losses or liquidation. Continue?`)) return;
+    await act(() => put('/api/config/trading', t), 'Trade settings saved');
+    refreshOverview();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// AI usage & cost
+
+async function pageAi(el) {
+  const days = +(new URLSearchParams(location.hash.split('?')[1] || '').get('days') || 30);
+  const [u, calls] = await Promise.all([api(`/api/ai/usage?days=${days}`), api('/api/ai/calls?limit=200')]);
+  const T = u.totals;
+  const tok = (t) => fmt.int(t.input_tokens + t.output_tokens);
+  const cacheRate = (t) => (t.input_tokens ? fmt.pct(t.cached_tokens / t.input_tokens, 0) : '—');
+  el.innerHTML = html`<div class="page-head"><h1>AI usage & cost</h1><span class="spacer"></span>
+      <div class="seg">${[1, 7, 30, 90].map((d) => raw(`<a class="btn ${d === days ? 'on' : ''}" href="#/ai?days=${d}">${d === 1 ? 'Today' : `${d} days`}</a>`))}</div></div>
+    ${u.llmAvailable ? '' : html`<div class="banner warn">No OpenAI key saved, so the rule-based researcher is used and costs nothing. Add the key in <a href="#/settings">Settings</a>.</div>`}
+    ${u.agent.status === 'stopped' ? html`<div class="banner warn">The agent is stopped: AI research is off.</div>` : ''}
+    <div class="kpis">
+      ${kpi('Spend today', `$${fmt.num(T.today.cost_usd, 4)}`, `cap $${u.dailyCapUsd}/day · ${T.today.calls}/${u.dailyCallCap} calls`)}
+      ${kpi('Spend last 7 days', `$${fmt.num(T.last7d.cost_usd, 4)}`, `${fmt.int(T.last7d.calls)} calls`)}
+      ${kpi(`Spend ${days === 1 ? 'today' : `last ${days} days`}`, `$${fmt.num(T.range.cost_usd, 4)}`, `${tok(T.range)} tokens · ${fmt.int(T.range.errors)} errors`)}
+      ${kpi('All time', `$${fmt.num(T.allTime.cost_usd, 4)}`, `${fmt.int(T.allTime.calls)} calls · ${tok(T.allTime)} tokens`)}
+      ${kpi('Research runs', fmt.int(u.research.runs), `${fmt.int(u.research.llm_runs ?? 0)} used AI · avg $${fmt.num((u.research.cost_usd || 0) / Math.max(u.research.llm_runs || 1, 1), 4)}/AI run`)}
+      ${kpi('Cache hit (input)', cacheRate(T.range), 'cached input bills at 10%')}
+    </div>
+    <div class="grid g2">
+      <div class="card"><h2>Daily spend (USD)</h2><div id="ai-daily"></div></div>
+      <div class="card"><h2>Model prices (per 1M tokens)</h2>${table([
+        { label: 'Model', render: (r) => html`<b>${r[0]}</b> ${r[0] === u.fastModel ? badge('fast / triage', 'info') : r[0] === u.deepModel ? badge('judge', 'info') : ''}` },
+        { label: 'Input', render: (r) => `$${r[1].inputPerM}`, num: true }, { label: 'Cached input', render: (r) => `$${r[1].cachedPerM}`, num: true }, { label: 'Output', render: (r) => `$${r[1].outputPerM}`, num: true },
+      ], Object.entries(u.pricing))}</div>
+    </div>
+    <div class="card" style="margin-top:14px"><h2>By model</h2>${table([
+      { label: 'Model', key: 'model' }, { label: 'Calls', render: (r) => fmt.int(r.calls), num: true },
+      { label: 'Input tokens', render: (r) => fmt.int(r.input_tokens), num: true }, { label: 'of which cached', render: (r) => fmt.int(r.cached_tokens), num: true },
+      { label: 'Output tokens', render: (r) => fmt.int(r.output_tokens), num: true }, { label: 'of which reasoning', render: (r) => fmt.int(r.reasoning_tokens), num: true },
+      { label: 'Cost', render: (r) => `$${fmt.num(r.cost_usd, 4)}`, num: true }, { label: 'Avg / call', render: (r) => `$${fmt.num(r.cost_usd / Math.max(r.calls, 1), 5)}`, num: true },
+      { label: 'p95 latency', render: (r) => (r.p95_ms ? `${fmt.num(r.p95_ms / 1000, 1)}s` : '—'), num: true }, { label: 'Errors', render: (r) => fmt.int(r.errors), num: true },
+    ], u.byModel, { empty: 'No AI calls in this period.' })}</div>
+    <div class="card" style="margin-top:14px"><h2>By step</h2><p class="muted" style="margin-top:0">fast = cheap triage · deep.* = analysts, skeptic (cheap model) and judges (strong model)</p>${table([
+      { label: 'Step', key: 'purpose' }, { label: 'Calls', render: (r) => fmt.int(r.calls), num: true }, { label: 'Input', render: (r) => fmt.int(r.input_tokens), num: true },
+      { label: 'Cached', render: (r) => fmt.int(r.cached_tokens), num: true }, { label: 'Output', render: (r) => fmt.int(r.output_tokens), num: true },
+      { label: 'Cost', render: (r) => `$${fmt.num(r.cost_usd, 4)}`, num: true }, { label: 'Avg latency', render: (r) => `${fmt.num(r.avg_latency_ms / 1000, 1)}s`, num: true }, { label: 'Errors', render: (r) => fmt.int(r.errors), num: true },
+    ], u.byPurpose, { empty: 'No AI calls in this period.' })}</div>
+    <div class="card" style="margin-top:14px"><h2>Recent AI calls</h2>${table([
+      { label: 'Time', render: (r) => fmt.dt(r.ts) }, { label: 'Model', key: 'model' }, { label: 'Step', key: 'purpose' },
+      { label: 'Research run', render: (r) => (r.run_id ? raw(`<a href="#/research?run=${esc(r.run_id)}" class="mono">${esc(r.run_id.slice(-8))}</a>`) : '—') },
+      { label: 'In', render: (r) => fmt.int(r.input_tokens), num: true }, { label: 'Cached', render: (r) => fmt.int(r.cached_tokens), num: true },
+      { label: 'Out', render: (r) => fmt.int(r.output_tokens), num: true }, { label: 'Reasoning', render: (r) => fmt.int(r.reasoning_tokens), num: true },
+      { label: 'Cost', render: (r) => `$${fmt.num(r.cost_usd, 5)}`, num: true }, { label: 'Latency', render: (r) => `${fmt.num(r.latency_ms / 1000, 1)}s`, num: true },
+      { label: 'Status', render: (r) => (r.ok ? badge('ok', 'good') : html`${badge('error', 'crit')} <span class="muted">${(r.error || '').slice(0, 80)}</span>`) },
+    ], calls, { empty: 'No AI calls yet.' })}</div>`.__raw;
+  barChart($('#ai-daily'), u.byDay.map((d) => ({ label: d.day.slice(5), value: d.cost_usd, tip: `${d.day}: $${fmt.num(d.cost_usd, 4)} · ${d.calls} calls · ${fmt.int(d.input_tokens + d.output_tokens)} tokens` })), { yFmt: (v) => `$${fmt.num(v, 3)}`, label: 'Daily AI spend' });
+}
+
+// ---------------------------------------------------------------------------
+// activity timeline
+
+const ACT_TYPES = [['anomaly', 'Anomalies'], ['research', 'Research'], ['signal', 'Signals'], ['order', 'Orders'], ['fill', 'Fills'], ['control', 'Controls & settings'], ['alert', 'Alerts']];
+const ACT_KIND = { anomaly: 'info', research: 'info', signal: '', order: '', fill: 'good', control: 'warn', alert: 'crit' };
+
+async function pageActivity(el) {
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const types = (q.get('types') || ACT_TYPES.map((t) => t[0]).join(',')).split(',');
+  const symbol = q.get('symbol') || '';
+  const load = async (before) => api(`/api/activity?types=${types.join(',')}&symbol=${encodeURIComponent(symbol)}&limit=150${before ? `&before=${before}` : ''}`);
+  let items = await load();
+  el.innerHTML = html`<div class="page-head"><h1>Activity</h1><span class="spacer"></span><button id="act-refresh">Refresh</button></div>
+    <p class="secondary" style="margin-top:0">Everything the system did, newest first: anomalies found, AI research and verdicts (with cost), strategy signals and why they were accepted or rejected, orders, fills, controls and settings changes, and alerts.</p>
+    <form class="toolbar card" id="act-filter">${ACT_TYPES.map(([k, l]) => html`<label><input type="checkbox" name="t" value="${k}" ${raw(types.includes(k) ? 'checked' : '')}> ${l}</label>`)}
+      <input name="symbol" placeholder="Symbol" value="${symbol}" style="width:120px" aria-label="Symbol"><button class="primary">Apply</button></form>
+    <div class="card" style="margin-top:14px"><div id="act-list"></div><div class="toolbar" style="margin-top:10px"><button id="act-more">Load older</button></div></div>`.__raw;
+  const render = () => {
+    $('#act-list').innerHTML = items.length ? items.map((i) => html`<div class="feed-item"><span class="t">${fmt.dt(i.ts)}</span><span style="width:90px;flex:none">${badge(i.type, ACT_KIND[i.type] ?? '')}</span>
+      <span class="body">${i.symbol ? html`<b>${i.symbol}</b> ` : ''}${i.type === 'research' ? raw(`<a href="#/research?run=${esc(i.id)}">${esc(i.title)}</a>`) : i.title}${i.costUsd ? html` <span class="muted">· AI $${fmt.num(i.costUsd, 4)}</span>` : ''}${i.status && i.type !== 'research' ? html` ${badge(i.status.toLowerCase())}` : ''}
+      ${i.detail ? html`<div class="muted" style="font-size:12px">${i.detail}</div>` : ''}</span></div>`.__raw).join('') : '<div class="empty">Nothing matches.</div>';
+  };
+  render();
+  $('#act-filter').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    location.hash = `#/activity?types=${f.getAll('t').join(',')}&symbol=${encodeURIComponent(String(f.get('symbol') || '').toUpperCase())}`;
+  });
+  $('#act-refresh').onclick = async () => { items = await load(); render(); };
+  $('#act-more').onclick = async () => {
+    const older = await load(items[items.length - 1]?.ts);
+    items = items.concat(older);
+    render();
+  };
+}
+
 const PAGES = {
-  dashboard: pageDashboard, trading: pageTrading, scanner: pageScanner, research: pageResearch, strategies: pageStrategies,
+  dashboard: pageDashboard, activity: pageActivity, ai: pageAi, 'trade-settings': pageTradeSettings, trading: pageTrading, scanner: pageScanner, research: pageResearch, strategies: pageStrategies,
   risk: pageRisk, validation: pageValidation, surveillance: pageSurveillance, compliance: pageCompliance, tax: pageTax, audit: pageAudit, settings: pageSettings,
 };
 

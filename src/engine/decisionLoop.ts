@@ -47,6 +47,10 @@ export interface LoopDeps {
   /** Live-mode compliance health; undefined in paper-only processes. */
   liveHealthy?: () => boolean;
   alwaysOpen: boolean;
+  /** Agent control: false when paused/stopped (exits still run elsewhere). */
+  entriesAllowed?: () => boolean;
+  /** Leverage for an instrument per trade settings (1 = cash). */
+  leverageFor?: (inst: Instrument) => number;
   now: () => number;
   universe: () => Instrument[];
   recentAnomalies: (key: string, sinceTs: number) => import('../core/types.ts').Anomaly[];
@@ -125,6 +129,7 @@ export class DecisionLoop {
     const mod = istParts(now).minuteOfDay;
     const acct = d.risk.checkAccount(now);
     if (acct.halted) return this.skip('account_halted');
+    if (d.entriesAllowed && !d.entriesAllowed()) return this.skip('agent_not_running');
     if (!d.paperOms.reconciled) return this.skip('paper_not_reconciled');
 
     const raw: Signal[] = [];
@@ -198,18 +203,19 @@ export class DecisionLoop {
         this.record(sig, 'rejected', ['live book not reconciled']);
         continue;
       }
-      const decision = d.risk.size(sig, inst, gate, metaSize, now, date);
+      const leverage = d.leverageFor ? d.leverageFor(inst) : 1;
+      const decision = d.risk.size(sig, inst, gate, metaSize, now, date, leverage);
       if (!decision.approved) {
         this.record(sig, 'rejected', decision.reasons);
         continue;
       }
       const oms = useLive ? d.liveOms! : d.paperOms;
-      const order = await oms.submitEntry(sig, decision.qty, inst, 'I');
+      const order = await oms.submitEntry(sig, decision.qty, inst, 'I', leverage);
       if (!order || order.status === 'REJECTED') {
         this.record(sig, 'rejected', [order?.reason ?? 'no price for entry']);
         continue;
       }
-      this.record(sig, 'accepted', [...decision.reasons, `qty ${decision.qty}`, `${useLive ? 'LIVE' : 'PAPER'} ${order.clientOrderId}`]);
+      this.record(sig, 'accepted', [...decision.reasons, `qty ${decision.qty}`, `notional ₹${Math.round(decision.notional)}`, `margin ₹${Math.round(decision.notional / leverage)} at ${leverage}x`, `max loss at stop ₹${Math.round(decision.riskAmount)}`, `${useLive ? 'LIVE' : 'PAPER'} ${order.clientOrderId}`]);
     }
   }
 

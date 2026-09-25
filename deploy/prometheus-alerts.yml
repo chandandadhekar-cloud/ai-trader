@@ -1,0 +1,36 @@
+# Prometheus alert rules for TradeAI (scrape http://node:8080/metrics from localhost / via auth).
+groups:
+  - name: tradeai
+    rules:
+      - alert: TradeAIDown
+        expr: up{job="tradeai"} == 0
+        for: 1m
+        labels: { severity: P0 }
+      - alert: KillSwitchEngaged
+        expr: tradeai_kill_switch == 1
+        labels: { severity: P0 }
+      - alert: DrawdownHigh
+        expr: tradeai_drawdown_ratio > 0.07
+        labels: { severity: P1 }
+      - alert: WebSocketDisconnected
+        expr: tradeai_ws_connected == 0
+        for: 30s
+        labels: { severity: P1 }
+      - alert: TickLagHigh
+        expr: tradeai_tick_lag_ms > 2000
+        for: 2m
+        labels: { severity: P1 }
+      - alert: ClockSkew
+        expr: abs(tradeai_clock_skew_ms) > 50
+        for: 5m
+        labels: { severity: P1 }
+      - alert: OrderRateNearThreshold
+        expr: tradeai_ops_peak >= 5
+        labels: { severity: P1 }
+      - alert: LlmCostHigh
+        expr: tradeai_llm_cost_usd_today > 20
+        labels: { severity: P2 }
+      - alert: ResearchBacklog
+        expr: tradeai_research_queue > 20
+        for: 5m
+        labels: { severity: P2 }

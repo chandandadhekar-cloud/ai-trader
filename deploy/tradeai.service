@@ -1,0 +1,22 @@
+# systemd unit for the trading node (Mumbai VPS on the registered static IP).
+[Unit]
+Description=TradeAI trading node
+After=network-online.target chronyd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tradeai
+WorkingDirectory=/opt/tradeai
+EnvironmentFile=/etc/tradeai/env          # decrypted from the vault / SOPS at boot
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning src/main.ts
+Restart=on-failure
+RestartSec=5
+# On restart the OMS reconciles with the broker before any new signal.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/tradeai/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

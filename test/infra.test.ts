@@ -4,6 +4,10 @@ import assert from 'node:assert/strict';
 import { decodeFeed, encodeFeed } from '../src/brokers/upstox/feed.ts';
 import { deltaSignature } from '../src/brokers/delta/rest.ts';
 import { mapUpstoxStatus } from '../src/brokers/upstox/rest.ts';
+import { Db } from '../src/db/database.ts';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { quoteToTick } from '../src/marketdata/snapshotSweeper.ts';
 import { BarBuilder } from '../src/marketdata/barBuilder.ts';
 import { adjustBars } from '../src/refdata/corpActions.ts';
@@ -122,4 +126,20 @@ test('Upstox order poller turns order-book changes into updates and fill deltas'
   assert.equal(await c.pollOrdersOnce(), 0); // no change → no event
   assert.deepEqual(updates, ['NEW', 'PARTIALLY_FILLED', 'FILLED']);
   assert.deepEqual(fills, [{ qty: 40, price: 100 }, { qty: 60, price: 101 }]);
+});
+
+test('migrations are idempotent across reopen and heal duplicate version rows', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tradeai-db-'));
+  const path = join(dir, 't.db');
+  try {
+    new Db(path).raw.close();
+    const db = new Db(path);
+    assert.equal(db.all('SELECT v FROM schema_version').length, 1);
+    // simulate a database written by the old buggy migrator
+    db.raw.exec('INSERT INTO schema_version (v) VALUES (1)');
+    db.raw.close();
+    new Db(path).raw.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

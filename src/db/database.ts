@@ -263,14 +263,15 @@ export class Db {
 
   private migrate(): void {
     this.raw.exec('CREATE TABLE IF NOT EXISTS schema_version (v INTEGER NOT NULL)');
-    const row = this.raw.prepare('SELECT v FROM schema_version').get() as { v: number } | undefined;
-    const current = row?.v ?? 0;
+    // MAX() tolerates databases left with several version rows by an earlier bug.
+    const row = this.raw.prepare('SELECT MAX(v) AS v FROM schema_version').get() as { v: number | null };
+    const current = row.v ?? 0;
     for (let i = current; i < MIGRATIONS.length; i++) {
       this.raw.exec('BEGIN');
       try {
         this.raw.exec(MIGRATIONS[i]);
-        if (row) this.raw.prepare('UPDATE schema_version SET v = ?').run(i + 1);
-        else this.raw.prepare('INSERT INTO schema_version (v) VALUES (?)').run(i + 1);
+        this.raw.exec('DELETE FROM schema_version');
+        this.raw.prepare('INSERT INTO schema_version (v) VALUES (?)').run(i + 1);
         this.raw.exec('COMMIT');
       } catch (e) {
         this.raw.exec('ROLLBACK');

@@ -5,20 +5,20 @@
   "description": "TradeAI: event-driven Indian equities/F&O + Delta India crypto trading system with market-wide anomaly scanner, research agent, validation stack and admin console",
   "type": "module",
   "engines": {
-    "node": ">=22.18.0"
+    "node": ">=22.6.0"
   },
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/main.ts",
-    "backtest": "node --disable-warning=ExperimentalWarning src/cli/backtest.ts",
-    "admin:passwd": "node --disable-warning=ExperimentalWarning src/cli/passwd.ts",
+    "start": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/main.ts",
+    "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning --watch src/main.ts",
+    "backtest": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli/backtest.ts",
+    "admin:passwd": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli/passwd.ts",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
     "check": "npm run typecheck && npm test",
-    "eval:research": "node --disable-warning=ExperimentalWarning src/research/evals/runEval.ts",
-    "train:meta": "node --disable-warning=ExperimentalWarning src/ml/trainMeta.ts",
-    "watchdog": "node --disable-warning=ExperimentalWarning src/ops/watchdog.ts",
-    "backup": "node --disable-warning=ExperimentalWarning src/cli/backup.ts"
+    "eval:research": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/research/evals/runEval.ts",
+    "train:meta": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/ml/trainMeta.ts",
+    "watchdog": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/ops/watchdog.ts",
+    "backup": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/cli/backup.ts"
   },
   "repository": {
     "type": "git",

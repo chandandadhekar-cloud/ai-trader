@@ -293,7 +293,9 @@ export class Db {
 
   private migrate(): void {
     this.raw.exec('CREATE TABLE IF NOT EXISTS schema_version (v INTEGER NOT NULL)');
-    const current = (this.raw.prepare('SELECT MAX(v) AS v FROM schema_version').get() as { v: number | null }).v ?? 0;
+    // MAX() tolerates databases left with several version rows by an earlier bug.
+    const row = this.raw.prepare('SELECT MAX(v) AS v FROM schema_version').get() as { v: number | null };
+    const current = row.v ?? 0;
     for (let i = current; i < MIGRATIONS.length; i++) {
       this.raw.exec('BEGIN');
       try {

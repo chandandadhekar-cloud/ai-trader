@@ -1,0 +1,23 @@
+{
+  "note": "Starter golden set. Replace/extend with 500–1,000 hand-labelled Indian headlines and filings (incl. Hinglish and market jargon), using only post-training-cutoff events for any performance claim.",
+  "cases": [
+    { "id": "g1", "symbol": "ABC", "moveRet": 0.035, "residualZ": 5.2, "explainedByIndex": 0.05,
+      "sources": [{ "id": "F1", "kind": "exchange_filing", "minutesRelativeToMove": -3, "title": "ABC Ltd: Receipt of order worth Rs 1,200 crore from NHAI" }],
+      "expect": { "direction": "UP", "category": ["order_win", "corporate_filing"], "verdict": ["REACT"] } },
+    { "id": "g2", "symbol": "DEF", "moveRet": -0.042, "residualZ": -4.8, "explainedByIndex": 0.1,
+      "sources": [{ "id": "F1", "kind": "exchange_filing", "minutesRelativeToMove": -2, "title": "DEF Pharma: USFDA issues Form 483 with 7 observations at Halol plant" }],
+      "expect": { "direction": "DOWN", "category": ["regulatory_action", "corporate_filing"], "verdict": ["REACT"] } },
+    { "id": "g3", "symbol": "GHI", "moveRet": 0.028, "residualZ": 4.5, "explainedByIndex": 0.0,
+      "sources": [{ "id": "M1", "kind": "media", "minutesRelativeToMove": 12, "title": "GHI shares zoom 3% in a weak market; here's why" }],
+      "expect": { "direction": "NONE", "category": ["no_identifiable_cause", "other", "technical_flow"], "verdict": ["FADE", "IGNORE"] } },
+    { "id": "g4", "symbol": "JKL", "moveRet": -0.012, "residualZ": -0.4, "explainedByIndex": 0.95,
+      "sources": [],
+      "expect": { "direction": "NONE", "category": ["macro_index", "sector_move"], "verdict": ["IGNORE"] } },
+    { "id": "g5", "symbol": "MNO", "moveRet": 0.05, "residualZ": 6.0, "explainedByIndex": 0.02,
+      "sources": [{ "id": "S1", "kind": "social", "minutesRelativeToMove": -1, "title": "Buzz on X: MNO to be acquired by global major? unconfirmed" }],
+      "expect": { "direction": "UP", "category": ["rumor_social"], "verdict": ["BLOCK", "IGNORE"] } },
+    { "id": "g6", "symbol": "PQR", "moveRet": -0.03, "residualZ": -4.1, "explainedByIndex": 0.05,
+      "sources": [{ "id": "F1", "kind": "exchange_filing", "minutesRelativeToMove": -4, "title": "PQR Ltd: Outcome of board meeting — Q2 net profit down 38% YoY, misses estimates" }],
+      "expect": { "direction": "DOWN", "category": ["results", "corporate_filing"], "verdict": ["REACT"] } }
+  ]
+}

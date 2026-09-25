@@ -1,0 +1,15 @@
+# Heartbeat watchdog — install on a SEPARATE host (ideally the warm standby on the secondary IP).
+[Unit]
+Description=TradeAI external watchdog
+After=network-online.target
+
+[Service]
+Type=simple
+User=tradeai
+WorkingDirectory=/opt/tradeai
+EnvironmentFile=/etc/tradeai/watchdog.env   # TRADEAI_HEALTH_URL, WATCHDOG_SILENCE_SEC, TELEGRAM_*, optional WATCHDOG_EXIT_ALL + UPSTOX_*
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning src/ops/watchdog.ts
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

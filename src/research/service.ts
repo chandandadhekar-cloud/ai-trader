@@ -9,7 +9,7 @@ import type { RuntimeConfig } from '../config/runtime.ts';
 import type { Settings } from '../config/settings.ts';
 import type { LlmClient } from './llm.ts';
 import { buildFactPack, type FactPackDeps } from './factPack.ts';
-import { runDeep, runDeterministic, runFast, type AgentRun } from './agents.ts';
+import { runCascade, runDeterministic, type AgentRun } from './agents.ts';
 import { verifyVerdict } from './verify.ts';
 import { mapVerdict } from './verdictMapper.ts';
 import { Calibrator, fitIsotonic, type IsotonicModel } from './calibration.ts';
@@ -113,15 +113,19 @@ export class ResearchService {
     }
 
     let run: AgentRun;
-    if (this.llm.available()) {
-      if (j.deep && this.deepAllowed()) {
-        this.deepTimes.push(Date.now());
-        run = await runDeep(this.llm, pack, this.s.LLM_DEEP_MODEL, this.s.LLM_DEEP_TIMEOUT_MS);
-      } else {
-        run = await runFast(this.llm, pack, this.s.LLM_FAST_MODEL, this.s.LLM_FAST_TIMEOUT_MS);
-      }
+    const spent = this.llm.usageToday().costUsd;
+    if (this.llm.available() && spent < this.s.LLM_MAX_USD_PER_DAY) {
+      const deepAllowed = this.deepAllowed();
+      run = await runCascade(this.llm, pack, {
+        fastModel: this.s.LLM_FAST_MODEL, deepModel: this.s.LLM_DEEP_MODEL,
+        fastTimeoutMs: this.s.LLM_FAST_TIMEOUT_MS, deepTimeoutMs: this.s.LLM_DEEP_TIMEOUT_MS,
+        fastEffort: this.s.LLM_FAST_EFFORT, deepEffort: this.s.LLM_DEEP_EFFORT,
+        deepAllowed, forceDeep: !!j.deep, unsureLow: this.s.LLM_UNSURE_LOW, unsureHigh: this.s.LLM_UNSURE_HIGH,
+      });
+      if (run.path === 'deep') this.deepTimes.push(Date.now());
     } else {
       run = runDeterministic(pack);
+      if (this.llm.available()) run.trace.budget = `daily LLM spend cap $${this.s.LLM_MAX_USD_PER_DAY} reached`;
     }
     this.stats.byPath[run.path] = (this.stats.byPath[run.path] ?? 0) + 1;
 

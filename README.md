@@ -6,6 +6,7 @@ Design rules carried over from the plan:
 
 - **No trade is the default.** Every entry passes surveillance, compliance, staleness, risk and cost/tax gates.
 - **The LLM never sizes or places trades.** It proposes a label; code verifies citations and timestamps and maps the label to an allowed action.
+- **Smart where it matters, cheap everywhere else.** The research agent uses OpenAI models in a cascade. Rules settle the obvious cases with no LLM call. `gpt-6-luna` ($0.10/$0.50 per 1M tokens) triages everything else. `gpt-6-sol` ($2/$10) judges only actionable (REACT/PROTECT) or unsure calls, and it must agree with luna, with a second judge breaking ties. A daily USD cap applies.
 - **Backtest, paper and live share one code path**: the same strategies, risk engine, OMS, fill simulator and decision loop.
 - **Accuracy is the wrong goal.** The target is a validated edge after costs and taxes. Validation uses Deflated Sharpe, PBO, CPCV and doubled-slippage tests, and every run is recorded in a trial registry.
 
@@ -28,7 +29,7 @@ Requires **Node ≥ 22.18**. TypeScript runs natively through Node's type stripp
 | `npm test` / `npm run typecheck` / `npm run check` | 68 tests, strict type check, or both |
 | `npm run backtest -- --days 20` | CLI backtest (synthetic data, or `--csv file`) |
 | `npm run train:meta -- --db data/tradeai.db` | Train the meta-label model; it is saved only if it improves CPCV out-of-sample R |
-| `npm run eval:research` | Golden-set regression eval for the research agent (`--deep`, `--deterministic`) |
+| `npm run eval:research` | Golden-set regression eval for the research agent: the production cascade, or `--fast`, `--deep`, `--deterministic`; reports accuracy, citation validity, Brier score, latency and cost |
 | `npm run watchdog` | External heartbeat watchdog (run it on another host) |
 | `npm run backup -- <dir>` | Consistent online SQLite snapshot |
 

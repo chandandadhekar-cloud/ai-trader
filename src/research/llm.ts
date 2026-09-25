@@ -1,14 +1,16 @@
-// Claude API wrapper for the research agent.
-//  - Structured outputs (output_config.format from a Zod schema) so the model can
-//    only return the verdict schema; parsing failures are errors, never guesses.
-//  - Hard timeout (no SDK retries inside the latency budget).
-//  - Daily call budget and per-model usage/cost accounting (plan §C cost control).
-//  - Server-side refusal fallbacks enabled for Opus-tier deep calls.
+// OpenAI (ChatGPT models) wrapper for the research agent.
+//  - Responses API + Structured Outputs (Zod schema, strict): the model can only
+//    return the verdict schema; a parse failure is an error, never a guess.
+//  - Reasoning effort per call (cheap `low` for triage, `medium` for judging).
+//  - Prompt caching: static instructions first, a stable `prompt_cache_key` per
+//    purpose; cached input bills at ~10% of the input rate.
+//  - Hard timeout (no SDK retries inside the latency budget), daily call budget,
+//    per-model usage/cost accounting (incl. cached and reasoning tokens).
 // The LLM never sizes or places trades: its output is a label that deterministic
 // code verifies and maps to an allowed action.
 
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import OpenAI from 'openai';
+import { zodTextFormat } from 'openai/helpers/zod';
 import type { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { istDate } from '../core/clock.ts';
@@ -16,31 +18,34 @@ import { createLogger } from '../core/logger.ts';
 
 const log = createLogger('llm');
 
-/** USD per million tokens (input, output). Keep in sync with Anthropic pricing. */
-const PRICING: Record<string, [number, number]> = {
-  'claude-haiku-4-5': [1, 5],
-  'claude-sonnet-5': [2, 10],
-  'claude-opus-5': [5, 25],
-  'claude-opus-5-5': [4, 20],
-  'claude-fable-5-1': [10, 50],
+/** USD per 1M tokens: [input, cached input, output]. OpenAI price list, Sep 2026. */
+const PRICING: Record<string, [number, number, number]> = {
+  'gpt-6-luna': [0.1, 0.01, 0.5],
+  'gpt-6-sol': [2, 0.2, 10],
+  'gpt-6-astra': [10, 1, 50],
 };
 
-export function estimateCostUsd(model: string, inTok: number, outTok: number): number {
-  const p = PRICING[model] ?? [5, 25];
-  return (inTok * p[0] + outTok * p[1]) / 1e6;
+export function estimateCostUsd(model: string, inTok: number, cachedTok: number, outTok: number): number {
+  const p = PRICING[model] ?? PRICING['gpt-6-sol'];
+  const fresh = Math.max(0, inTok - cachedTok);
+  return (fresh * p[0] + cachedTok * p[1] + outTok * p[2]) / 1e6;
 }
 
 export class LlmBudgetError extends Error {}
 export class LlmRefusalError extends Error {}
+
+export type Effort = 'none' | 'low' | 'medium' | 'high';
 
 export interface StructuredCallOpts<T> {
   model: string;
   system: string;
   user: string;
   schema: z.ZodType<T>;
+  /** Short name for the output schema (required by structured outputs). */
+  schemaName: string;
   timeoutMs: number;
   maxTokens?: number;
-  effort?: 'low' | 'medium' | 'high';
+  effort?: Effort;
   purpose: string;
 }
 
@@ -49,6 +54,7 @@ export interface StructuredResult<T> {
   model: string;
   latencyMs: number;
   inputTokens: number;
+  cachedTokens: number;
   outputTokens: number;
   costUsd: number;
 }
@@ -59,8 +65,8 @@ export interface LlmClient {
   usageToday(): { calls: number; costUsd: number; errors: number; byModel: Record<string, { calls: number; costUsd: number; p95Ms?: number }> };
 }
 
-export class AnthropicLlm implements LlmClient {
-  private client?: Anthropic;
+export class OpenAiLlm implements LlmClient {
+  private client?: OpenAI;
   private db: Db;
   private maxCallsPerDay: number;
   private latencies = new Map<string, number[]>();
@@ -68,62 +74,58 @@ export class AnthropicLlm implements LlmClient {
   constructor(db: Db, apiKey: string | undefined, maxCallsPerDay: number) {
     this.db = db;
     this.maxCallsPerDay = maxCallsPerDay;
-    if (apiKey) this.client = new Anthropic({ apiKey, maxRetries: 0 });
+    if (apiKey) this.client = new OpenAI({ apiKey, maxRetries: 0 });
   }
 
   available(): boolean {
     return !!this.client;
   }
 
-  private supportsEffort(model: string): boolean {
-    return !model.startsWith('claude-haiku');
-  }
-
-  private supportsFallbacks(model: string): boolean {
-    return model === 'claude-opus-5' || model.startsWith('claude-fable-5');
-  }
-
   async call<T>(o: StructuredCallOpts<T>): Promise<StructuredResult<T>> {
-    if (!this.client) throw new Error('ANTHROPIC_API_KEY not configured');
+    if (!this.client) throw new Error('OPENAI_API_KEY not configured');
     const day = istDate(Date.now());
     const used = this.db.get<{ n: number }>('SELECT COALESCE(SUM(calls),0) AS n FROM llm_usage WHERE day = ?', day)?.n ?? 0;
     if (used >= this.maxCallsPerDay) throw new LlmBudgetError(`daily LLM call budget exhausted (${used}/${this.maxCallsPerDay})`);
 
     const t0 = Date.now();
-    const params = {
-      model: o.model,
-      max_tokens: o.maxTokens ?? 2048,
-      system: o.system,
-      messages: [{ role: 'user' as const, content: o.user }],
-      output_config: {
-        format: zodOutputFormat(o.schema),
-        ...(o.effort && this.supportsEffort(o.model) ? { effort: o.effort } : {}),
-      },
-      ...(this.supportsFallbacks(o.model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
-    };
     let timer: NodeJS.Timeout | undefined;
     try {
       const res = await Promise.race([
-        this.client.beta.messages.parse(params, { timeout: o.timeoutMs, maxRetries: 0 }),
+        this.client.responses.parse(
+          {
+            model: o.model,
+            // Static instructions first → stable, cacheable prefix.
+            instructions: o.system,
+            input: o.user,
+            text: { format: zodTextFormat(o.schema, o.schemaName) },
+            reasoning: { effort: o.effort ?? 'low' },
+            max_output_tokens: o.maxTokens ?? 4000,
+            prompt_cache_key: `tradeai-${o.purpose.split('.')[0]}`,
+            store: false,
+          },
+          { timeout: o.timeoutMs, maxRetries: 0 },
+        ),
         new Promise<never>((_, rej) => {
           timer = setTimeout(() => rej(new Error(`LLM timeout after ${o.timeoutMs}ms (${o.purpose})`)), o.timeoutMs + 250);
         }),
       ]);
       const latency = Date.now() - t0;
       const inTok = res.usage?.input_tokens ?? 0;
-      const outTok = res.usage?.output_tokens ?? 0;
-      const cost = estimateCostUsd(o.model, inTok, outTok);
+      const cached = res.usage?.input_tokens_details?.cached_tokens ?? 0;
+      const outTok = res.usage?.output_tokens ?? 0; // includes reasoning tokens
+      const cost = estimateCostUsd(o.model, inTok, cached, outTok);
       this.record(day, o.model, inTok, outTok, cost, latency, false);
-      if (res.stop_reason === 'refusal') throw new LlmRefusalError(`model declined (${o.purpose})`);
-      if (res.stop_reason === 'max_tokens') throw new Error(`LLM output truncated at max_tokens (${o.purpose})`);
-      const parsed = res.parsed_output as T | null | undefined;
+      const refused = res.output?.some((item) => item.type === 'message' && item.content.some((c) => c.type === 'refusal'));
+      if (refused) throw new LlmRefusalError(`model refused (${o.purpose})`);
+      if (res.status === 'incomplete') throw new Error(`LLM output incomplete: ${res.incomplete_details?.reason ?? 'unknown'} (${o.purpose})`);
+      const parsed = res.output_parsed as T | null;
       if (parsed === null || parsed === undefined) throw new Error(`LLM returned no parseable output (${o.purpose})`);
-      return { value: parsed, model: res.model ?? o.model, latencyMs: latency, inputTokens: inTok, outputTokens: outTok, costUsd: cost };
+      return { value: parsed, model: res.model ?? o.model, latencyMs: latency, inputTokens: inTok, cachedTokens: cached, outputTokens: outTok, costUsd: cost };
     } catch (e) {
-      if (!(e instanceof LlmRefusalError)) this.record(day, o.model, 0, 0, 0, Date.now() - t0, true);
-      if (e instanceof Anthropic.RateLimitError) log.warn('LLM rate limited', { purpose: o.purpose });
-      else if (e instanceof Anthropic.APIConnectionError) log.warn('LLM connection error', { purpose: o.purpose });
-      else if (e instanceof Anthropic.APIError) log.error('LLM API error', { status: e.status, purpose: o.purpose, msg: e.message });
+      if (!(e instanceof LlmRefusalError) && !(e instanceof LlmBudgetError)) this.record(day, o.model, 0, 0, 0, Date.now() - t0, true);
+      if (e instanceof OpenAI.RateLimitError) log.warn('LLM rate limited', { purpose: o.purpose });
+      else if (e instanceof OpenAI.APIConnectionError) log.warn('LLM connection error', { purpose: o.purpose });
+      else if (e instanceof OpenAI.APIError) log.error('LLM API error', { status: e.status, purpose: o.purpose, msg: e.message });
       throw e;
     } finally {
       if (timer) clearTimeout(timer);

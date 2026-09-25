@@ -26,7 +26,7 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0",
+    "openai": "^7.23.0",
     "protobufjs": "^8.8.0",
     "zod": "^4.6.5"
   },

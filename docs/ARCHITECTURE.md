@@ -12,8 +12,9 @@
                                                                                           │
          research.request ◄──────────── severity ≥ threshold / open position ◄───────────┘
                 │
-   Fact pack (<2 s, no LLM) ─► fast (Haiku 4.5) | deep (Opus 5: 3 analysts → skeptic → 2 judges)
-                │                                   | deterministic fallback
+   Fact pack (<2 s, no LLM) ─► rules short-circuit (no LLM) ─► fast: gpt-6-luna ─► escalate only if
+                │    actionable / unsure / contradicted / position ─► deep: analysts + skeptic (luna) → judge (gpt-6-sol)
+                │    judge must agree with luna, else a 2nd sol judge breaks the tie   | deterministic fallback
    verify (citations, timestamps, source priority) ─► calibrate ─► verdict mapper ─► research.verdict (TTL)
                                                                                           │
  1-minute decision loop:  gates (session, surveillance, staleness, compliance, reconcile)  │
@@ -87,6 +88,7 @@ Status key: ✅ implemented and tested · 🟡 implemented, needs live verificat
 | RAG over a filings index (pgvector) | ⬜ |
 | Local FinBERT/DeBERTa first pass | 🟡 (lexicon placeholder in `research/localNlp.ts`) |
 | Versioned prompts, pinned models, golden-set regression eval | ✅ (starter golden set; expand to 500–1,000 labelled cases) |
+| Cost control: rules short-circuit, cheap-model triage, strong model only on escalation, prompt caching, daily call and USD caps, per-model cost/latency tracking | ✅ (`research/agents.ts`, `research/llm.ts`) |
 
 ## Deliberate substitutions
 

@@ -59,10 +59,17 @@ const Schema = z.object({
   DELTA_WS_URL: z.string().default('wss://socket-ind.testnet.deltaex.org'),
   DELTA_DEADMAN_MS: num(60000),
 
-  // LLM research
-  ANTHROPIC_API_KEY: z.string().optional(),
-  LLM_FAST_MODEL: z.string().default('claude-haiku-4-5'),
-  LLM_DEEP_MODEL: z.string().default('claude-opus-5'),
+  // LLM research (OpenAI). Cascade: rules → cheap fast model → strong judge only when needed.
+  OPENAI_API_KEY: z.string().optional(),
+  LLM_FAST_MODEL: z.string().default('gpt-6-luna'),
+  LLM_DEEP_MODEL: z.string().default('gpt-6-sol'),
+  LLM_FAST_EFFORT: z.enum(['none', 'low', 'medium', 'high']).default('low'),
+  LLM_DEEP_EFFORT: z.enum(['none', 'low', 'medium', 'high']).default('medium'),
+  /** Fast-path confidence inside [LOW, HIGH] counts as unsure and escalates to the strong model. */
+  LLM_UNSURE_LOW: num(0.35),
+  LLM_UNSURE_HIGH: num(0.75),
+  /** Daily spend cap in USD (all models). */
+  LLM_MAX_USD_PER_DAY: num(5),
   LLM_FAST_TIMEOUT_MS: num(20000),
   LLM_DEEP_TIMEOUT_MS: num(180000),
   LLM_MAX_CALLS_PER_DAY: num(400),

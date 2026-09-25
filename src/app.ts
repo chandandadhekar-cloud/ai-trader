@@ -30,7 +30,7 @@ import { ComplianceGuard } from './brokers/compliance.ts';
 import { UpstoxClient } from './brokers/upstox/rest.ts';
 import { UpstoxFeed, TIER_CAPS } from './brokers/upstox/feed.ts';
 import { DeltaClient } from './brokers/delta/rest.ts';
-import { AnthropicLlm } from './research/llm.ts';
+import { OpenAiLlm } from './research/llm.ts';
 import { ResearchService } from './research/service.ts';
 import { GdeltSource, NseAnnouncementsSource, SyntheticFilingSource, type NewsSource } from './research/sources.ts';
 import { StrategyRegistry } from './strategies/registry.ts';
@@ -79,7 +79,7 @@ export class App {
   sweeper?: SnapshotSweeper;
   readonly backfill: BackfillService;
   readonly delta?: DeltaClient;
-  readonly llm: AnthropicLlm;
+  readonly llm: OpenAiLlm;
   readonly research: ResearchService;
   readonly trials: TrialRegistry;
   readonly strategies: StrategyRegistry;
@@ -143,7 +143,7 @@ export class App {
     this.backfill = new BackfillService(this.db, async (key) => (this.upstox ? this.upstox.intraday(key) : []), (b) => { this.quotes.onBar(b); this.scanner.onBar(b); });
 
     // Research
-    this.llm = new AnthropicLlm(this.db, s.ANTHROPIC_API_KEY, s.LLM_MAX_CALLS_PER_DAY);
+    this.llm = new OpenAiLlm(this.db, s.OPENAI_API_KEY, s.LLM_MAX_CALLS_PER_DAY);
     const sources: NewsSource[] = [];
     if (synthetic) {
       this.synthetic = new SyntheticMarket((t) => this.onTick(t), { seed: Date.now() % 100000 });

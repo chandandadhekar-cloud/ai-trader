@@ -55,4 +55,4 @@
 
 ## Changing prompts or models
 
-Run `npm run eval:research` (and `-- --deep`) before and after the change. Citation validity must stay above 95% and p95 fast-path latency below 20 s. The prompt version is stored on every verdict.
+Run `npm run eval:research` (the cascade), plus `-- --fast` and `-- --deep`, before and after the change. Compare accuracy **and** cost per case; only switch to a larger model (for example `LLM_DEEP_MODEL=gpt-6-astra`) if the eval shows it fixes real mistakes. Citation validity must stay above 95% and p95 fast-path latency below 20 s. The prompt version is stored on every verdict.

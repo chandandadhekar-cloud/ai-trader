@@ -1,17 +1,17 @@
 import { z } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
 
-// Static configuration from the environment. Secrets are read from env only
-// (load them from a vault / SOPS-decrypted env file at deploy time, never commit them).
-// Runtime-tunable values (risk limits, strategy stages) live in the database and are
-// edited from the admin console with an audit trail — see src/config/runtime.ts.
+// Static configuration. Precedence: schema defaults < .env / environment < values
+// saved from the admin console (Settings page, stored in the DB with secrets
+// encrypted — see settingsStore.ts). Changes apply through an in-app restart.
+// Runtime-tunable limits (risk, scanner, research) live in runtime.ts.
 
 const bool = z
   .union([z.boolean(), z.string()])
   .transform((v) => (typeof v === 'boolean' ? v : ['1', 'true', 'yes', 'on'].includes(v.toLowerCase())));
 const num = (d: number) => z.coerce.number().default(d);
 
-const Schema = z.object({
+export const Schema = z.object({
   NODE_ENV: z.string().default('development'),
   HOST: z.string().default('127.0.0.1'),
   PORT: num(8080),
@@ -108,8 +108,8 @@ function loadDotEnv(path = '.env'): Record<string, string> {
   return out;
 }
 
-export function loadSettings(env: Record<string, string | undefined> = process.env, dotenvPath?: string): Settings {
-  const merged = { ...loadDotEnv(dotenvPath), ...env };
+export function loadSettings(env: Record<string, string | undefined> = process.env, dotenvPath?: string, overrides: Record<string, string> = {}): Settings {
+  const merged: Record<string, string | undefined> = { ...loadDotEnv(dotenvPath), ...env, ...overrides };
   // Treat empty strings as unset so optional secrets are not "configured but blank".
   for (const k of Object.keys(merged)) if (merged[k] === '') delete merged[k];
   return Schema.parse(merged);

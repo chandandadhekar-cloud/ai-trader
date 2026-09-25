@@ -42,6 +42,8 @@
 
 ## Backups and disaster recovery
 
+- Settings and API keys entered in the console are encrypted with `data/.master.key` (or `TRADEAI_MASTER_KEY`). Back the key up **separately** from database snapshots. If it is lost, re-enter the secrets on the Settings page.
+
 - Take hourly online snapshots with `npm run backup -- /var/backups/tradeai` and ship them to object storage (for example with rclone).
 - Keep a warm standby VPS on the **secondary** registered IP with the code deployed and the latest snapshot restored. It stays disabled until failover.
 - Keep the audit log and order history for at least 5 years.

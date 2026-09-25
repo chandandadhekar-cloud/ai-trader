@@ -51,7 +51,7 @@ export class ComplianceGuard {
 
   /** Headers every Upstox order-API call must carry. */
   orderHeaders(): Record<string, string> {
-    if (!this.s.UPSTOX_ALGO_NAME) throw new Error('UPSTOX_ALGO_NAME not configured: orders would be rejected by the broker');
+    if (!this.s.UPSTOX_ALGO_NAME) throw new Error('Algo Name not configured in Settings (UPSTOX_ALGO_NAME): orders would be rejected by the broker');
     return { 'X-Algo-Name': this.s.UPSTOX_ALGO_NAME };
   }
 
@@ -83,13 +83,13 @@ export class ComplianceGuard {
 
   status(): ComplianceStatus {
     const blockers: string[] = [];
-    if (!this.s.UPSTOX_ALGO_NAME) blockers.push('X-Algo-Name not configured (UPSTOX_ALGO_NAME)');
-    if (!this.s.STATIC_IP_PRIMARY) blockers.push('Primary static IP not configured');
+    if (!this.s.UPSTOX_ALGO_NAME) blockers.push('Algo Name (X-Algo-Name) not set in Settings');
+    if (!this.s.STATIC_IP_PRIMARY) blockers.push('Primary static IP not set in Settings');
     if (!this.egressMatches()) blockers.push(this.egressIp ? `Egress IP ${this.egressIp} is not registered` : 'Egress IP not verified');
     if (this.egressCheckedAt && Date.now() - this.egressCheckedAt > 10 * 60_000) blockers.push('Egress IP check older than 10 minutes');
     if (!this.tokenPresentFn()) blockers.push('No Upstox access token (daily login required)');
-    if (!this.s.LIVE_TRADING_ENABLED) blockers.push('LIVE_TRADING_ENABLED is false');
-    if (this.s.MODE !== 'live') blockers.push(`MODE is ${this.s.MODE}`);
+    if (!this.s.LIVE_TRADING_ENABLED) blockers.push('Live trading switch is off');
+    if (this.s.MODE !== 'live') blockers.push(`Mode is ${this.s.MODE}`);
     return {
       algoName: this.s.UPSTOX_ALGO_NAME,
       algoNameConfigured: !!this.s.UPSTOX_ALGO_NAME,

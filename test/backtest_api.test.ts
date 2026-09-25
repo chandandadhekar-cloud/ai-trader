@@ -51,6 +51,16 @@ test('API: login required, CSRF header enforced, health public', async () => {
     assert.equal(audit.ok, true);
     const bad = await fetch(`${base}/api/config/risk`, { method: 'PUT', headers: { Cookie: cookie, 'Content-Type': 'application/json', 'X-Requested-With': 'tradeai' }, body: JSON.stringify({ riskPerTrade: 0.5 }) });
     assert.equal(bad.status, 400); // schema caps risk per trade at 2%
+    const H = { Cookie: cookie, 'Content-Type': 'application/json', 'X-Requested-With': 'tradeai' };
+    const put = await fetch(`${base}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ values: { OPENAI_API_KEY: 'sk-abc', TELEGRAM_CHAT_ID: '42' } }) });
+    const pr = await put.json();
+    assert.deepEqual(pr.changed.sort(), ['OPENAI_API_KEY', 'TELEGRAM_CHAT_ID']);
+    assert.equal(pr.restartPending, true);
+    const view = await (await fetch(`${base}/api/settings`, { headers: { Cookie: cookie } })).json();
+    assert.ok(!JSON.stringify(view).includes('sk-abc'));
+    assert.equal(view.fields.find((f: { key: string }) => f.key === 'OPENAI_API_KEY').isSet, true);
+    assert.equal(view.fields.find((f: { key: string }) => f.key === 'TELEGRAM_CHAT_ID').value, '42');
+    assert.equal((await fetch(`${base}/api/settings`, { method: 'PUT', headers: H, body: JSON.stringify({ values: { OPS_HARD_LIMIT: 20 } }) })).status, 400);
   } finally {
     await srv.close();
     await app.stop();

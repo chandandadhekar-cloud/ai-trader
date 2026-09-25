@@ -9,7 +9,8 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { App } from '../app.ts';
 import { AuthService } from './auth.ts';
-import { redactedSettings } from '../config/settings.ts';
+import { loadSettings, redactedSettings } from '../config/settings.ts';
+import { SettingsStore } from '../config/settingsStore.ts';
 import { recentLogs } from '../core/logger.ts';
 import { sessionState, NSE_HOLIDAYS, SPECIAL_SESSIONS, CAS_LIVE_DATE, NEW_PREOPEN_DATE } from '../config/calendar.ts';
 import { istParts, istDate } from '../core/clock.ts';
@@ -73,9 +74,11 @@ interface BacktestJob {
   error?: string;
 }
 
-export function startServer(app: App): { close: () => Promise<void>; port: number } {
+export function startServer(app: App, opts: { restart?: () => Promise<void> } = {}): { close: () => Promise<void>; port: number } {
   const s = app.s;
   const auth = new AuthService(app.db, s.ADMIN_USER, s.ADMIN_PASSWORD_HASH, s.SESSION_TTL_HOURS, s.DB_PATH);
+  const settingsStore = new SettingsStore(app.db, s.DB_PATH, app.audit);
+  let restartPending = false;
   const routes: Route[] = [];
   const jobs = new Map<string, BacktestJob>();
   const add = (method: string, path: string, h: Handler, authRequired = true) => {
@@ -221,7 +224,71 @@ export function startServer(app: App): { close: () => Promise<void>; port: numbe
       throw new HttpError(400, String((e as Error).message));
     }
   });
-  add('GET', '/api/settings', () => redactedSettings(s));
+  // ---- console-managed settings (API keys etc.) ---------------------------------
+  add('GET', '/api/settings', () => ({
+    fields: settingsStore.view(),
+    restartPending,
+    canRestart: !!opts.restart,
+    running: redactedSettings(s),
+    dbPath: s.DB_PATH,
+  }));
+  add('PUT', '/api/settings', (c) => {
+    try {
+      const r = settingsStore.save(c.body.values ?? {}, actor(c), c.body.confirmation);
+      if (r.changed.length) restartPending = true;
+      return { ...r, restartPending };
+    } catch (e) {
+      throw new HttpError(400, String((e as Error).message));
+    }
+  });
+  add('POST', '/api/system/restart', (c) => {
+    if (!opts.restart) throw new HttpError(400, 'restart not available in this process');
+    app.audit.append(actor(c), 'system.restart', null, {});
+    setTimeout(() => void opts.restart!(), 300);
+    return { ok: true, port: loadSettings(process.env, undefined, settingsStore.overrides()).PORT };
+  });
+  add('POST', '/api/settings/test/:target', async (c) => {
+    // Tests use the SAVED values (even before restart), so keys can be checked first.
+    const eff = loadSettings(process.env, undefined, settingsStore.overrides());
+    const t = c.params.target;
+    const timeout = AbortSignal.timeout(10_000);
+    try {
+      if (t === 'openai') {
+        if (!eff.OPENAI_API_KEY) return { ok: false, message: 'No OpenAI API key saved' };
+        const res = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(eff.LLM_FAST_MODEL)}`, { headers: { Authorization: `Bearer ${eff.OPENAI_API_KEY}` }, signal: timeout });
+        const res2 = await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(eff.LLM_DEEP_MODEL)}`, { headers: { Authorization: `Bearer ${eff.OPENAI_API_KEY}` }, signal: timeout });
+        if (res.status === 401) return { ok: false, message: 'OpenAI rejected the key (401)' };
+        return { ok: res.ok && res2.ok, message: `key accepted · ${eff.LLM_FAST_MODEL}: ${res.ok ? 'available' : `HTTP ${res.status}`} · ${eff.LLM_DEEP_MODEL}: ${res2.ok ? 'available' : `HTTP ${res2.status}`}` };
+      }
+      if (t === 'telegram') {
+        if (!eff.TELEGRAM_BOT_TOKEN || !eff.TELEGRAM_CHAT_ID) return { ok: false, message: 'Bot token and chat id are both required' };
+        const res = await fetch(`https://api.telegram.org/bot${eff.TELEGRAM_BOT_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: eff.TELEGRAM_CHAT_ID, text: 'TradeAI test alert ✅' }), signal: timeout });
+        return { ok: res.ok, message: res.ok ? 'Test message sent' : `Telegram returned HTTP ${res.status}` };
+      }
+      if (t === 'upstox') {
+        if (!eff.UPSTOX_API_KEY || !eff.UPSTOX_API_SECRET || !eff.UPSTOX_REDIRECT_URI) return { ok: false, message: 'API key, secret and redirect URI are required' };
+        if (!eff.UPSTOX_ALGO_NAME) return { ok: false, message: 'Credentials saved, but Algo Name is missing (orders would be rejected)' };
+        if (!app.upstox?.hasToken()) return { ok: true, message: 'Credentials saved. Restart, then complete the daily login on the Compliance page to verify them.' };
+        const pos = await app.upstox.getPositions().then(() => true).catch(() => false);
+        return { ok: pos, message: pos ? 'Upstox session is active and the API responds' : 'Upstox session token was rejected; log in again from the Compliance page' };
+      }
+      if (t === 'delta') {
+        const res = await fetch(`${eff.DELTA_BASE_URL.replace(/\/$/, '')}/v2/products?contract_types=perpetual_futures`, { signal: timeout });
+        if (!res.ok) return { ok: false, message: `Delta returned HTTP ${res.status}` };
+        return { ok: true, message: eff.DELTA_API_KEY ? 'Delta reachable; key saved (verified on first signed call after restart)' : 'Delta reachable; no API key saved yet' };
+      }
+      if (t === 'ip') {
+        const res = await fetch(eff.EGRESS_IP_CHECK_URL, { signal: timeout });
+        const ip = (await res.text()).trim();
+        const match = ip === eff.STATIC_IP_PRIMARY || ip === eff.STATIC_IP_SECONDARY;
+        return { ok: match, message: `This server's egress IP is ${ip}${match ? ' (registered)' : ' — not one of the saved static IPs'}` };
+      }
+      throw new HttpError(404, 'unknown test');
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      return { ok: false, message: `Connection failed: ${String((e as Error).message ?? e)}` };
+    }
+  });
   add('POST', '/api/paper/reset', (c) => {
     const cap = Number(c.body.capital ?? s.CAPITAL_INR);
     if (!(cap > 0)) throw new HttpError(400, 'capital must be > 0');
@@ -470,7 +537,13 @@ export function startServer(app: App): { close: () => Promise<void>; port: numbe
   });
   server.listen(s.PORT, s.HOST);
   log.info('admin console listening', { url: `http://${s.HOST}:${s.PORT}` });
-  return { close: () => new Promise((r) => server.close(() => r())), port: s.PORT };
+  return {
+    close: () => new Promise((r) => {
+      server.close(() => r());
+      server.closeAllConnections(); // SSE streams would otherwise keep the server open
+    }),
+    port: s.PORT,
+  };
 }
 
 async function serveStatic(pathname: string, res: ServerResponse): Promise<void> {

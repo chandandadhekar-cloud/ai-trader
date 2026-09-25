@@ -210,7 +210,7 @@ function updateDashboard() {
     ${kpi('Signals', fmt.int(o.loop.signals), `${o.loop.accepted} accepted · ${o.loop.rejected} rejected · ${o.loop.shadow} shadow`)}`.__raw;
   const banners = [];
   if (o.killSwitch.engaged) banners.push(html`<div class="banner crit"><div class="row"><span><b>Kill switch engaged</b> — ${o.killSwitch.reason} (by ${o.killSwitch.by}, ${fmt.ago(o.killSwitch.at)}). New entries are blocked.</span><button class="sm" id="disengage-btn">Disengage…</button></div></div>`);
-  if (o.dataSource === 'synthetic') banners.push(html`<div class="banner warn">Synthetic market data (demo). Prices, filings and anomalies are simulated; configure Upstox credentials and <code>DATA_SOURCE=upstox</code> for real data.</div>`);
+  if (o.dataSource === 'synthetic') banners.push(html`<div class="banner warn">Synthetic market data (demo). Prices, filings and anomalies are simulated; add your Upstox keys and switch the data source in <a href="#/settings">Settings</a> for real data.</div>`);
   if (!o.surveillance.fresh) banners.push(html`<div class="banner warn">Today's NSE surveillance files are not loaded — equity entries are blocked. <a href="#/surveillance">Load them</a>.</div>`);
   if (o.mode === 'live' && !o.compliance.liveReady) banners.push(html`<div class="banner crit">Live mode, but compliance blockers exist: ${o.compliance.blockers.join('; ')}.</div>`);
   $('#dash-banners').innerHTML = banners.map((x) => x.__raw).join('');
@@ -597,18 +597,18 @@ async function pageCompliance(el) {
   const [c, cal] = await Promise.all([api('/api/compliance'), api('/api/calendar')]);
   const o = state.overview;
   const checks = [
-    ['X-Algo-Name configured', c.algoNameConfigured, c.algoName || 'set UPSTOX_ALGO_NAME to the Algo Name registered on your Upstox Algo Trading App'],
-    ['Primary static IP registered', !!c.staticIps.primary, c.staticIps.primary ? `${c.staticIps.primary}${c.staticIps.secondary ? ` · secondary ${c.staticIps.secondary}` : ''}` : 'set STATIC_IP_PRIMARY (and optional STATIC_IP_SECONDARY)'],
+    ['X-Algo-Name configured', c.algoNameConfigured, c.algoName || 'Settings → Upstox broker → Algo Name (as registered on your Upstox Algo Trading App)'],
+    ['Primary static IP registered', !!c.staticIps.primary, c.staticIps.primary ? `${c.staticIps.primary}${c.staticIps.secondary ? ` · secondary ${c.staticIps.secondary}` : ''}` : 'Settings → Static IP & order limits'],
     ['Egress IP matches a registered IP', c.egressMatches, c.egressIp ? `egress ${c.egressIp} (checked ${fmt.ago(c.egressCheckedAt)})` : c.egressError || 'not checked'],
     ['Daily Upstox login', c.tokenPresent, c.tokenPresent ? 'access token present' : 'log in below (tokens are invalidated daily and after IP changes)'],
     ['OPS throttle below 10/sec', c.opsHardLimit < 10, `hard cap ${c.opsHardLimit} OPS, alert at ${c.opsAlertAt}; exchange threshold 10`],
-    ['Live trading switch', o?.liveTradingEnabled, `MODE=${o?.mode}, LIVE_TRADING_ENABLED=${o?.liveTradingEnabled}`],
+    ['Live trading switch', o?.liveTradingEnabled, `mode ${o?.mode}, live switch ${o?.liveTradingEnabled ? 'on' : 'off'} (Settings → Trading mode & data)`],
   ];
   el.innerHTML = html`<div class="page-head"><h1>Compliance (SEBI / NSE retail-algo framework)</h1><span class="spacer"></span><button id="ipcheck">Check egress IP</button></div>
     <div class="banner ${c.liveReady ? 'info' : 'warn'}">${c.liveReady ? 'All live-order prerequisites pass.' : html`Live orders are blocked until: ${c.blockers.join('; ')}.`}</div>
     <div class="grid g2">
       <div class="card"><h2>Checklist</h2><ul class="health-list">${checks.map(([n, ok, d]) => html`<li><span class="dot ${ok ? 'good' : 'crit'}"></span><span class="name">${n}<div class="muted" style="font-size:12px">${d}</div></span>${ok ? badge('OK', 'good') : badge('Missing', 'crit')}</li>`)}</ul>
-        ${c.upstoxLoginUrl ? html`<div class="toolbar" style="margin-top:12px"><a class="btn primary" href="${c.upstoxLoginUrl}">Daily Upstox login</a><span class="muted">Redirect URI must point to /api/upstox/callback</span></div>` : html`<p class="muted">Set UPSTOX_API_KEY, UPSTOX_API_SECRET and UPSTOX_REDIRECT_URI to enable the daily login flow.</p>`}</div>
+        ${c.upstoxLoginUrl ? html`<div class="toolbar" style="margin-top:12px"><a class="btn primary" href="${c.upstoxLoginUrl}">Daily Upstox login</a><span class="muted">Redirect URI must point to /api/upstox/callback</span></div>` : html`<p class="muted">Add the Upstox API key, secret and redirect URI in <a href="#/settings">Settings</a> to enable the daily login.</p>`}</div>
       <div class="card"><h2>Order headers actually sent</h2><dl class="kv"><dt>Paper (last order)</dt><dd class="mono">${JSON.stringify(c.lastPaperHeaders || null)}</dd><dt>Live (last order)</dt><dd class="mono">${JSON.stringify(c.lastLiveHeaders || null)}</dd></dl>
         <h3 style="margin-top:16px">Throttle</h3><dl class="kv"><dt>Current OPS</dt><dd>${o?.throttle.currentOps}</dd><dt>Peak OPS</dt><dd>${o?.throttle.peakOps}</dd><dt>Throttle rejections</dt><dd>${o?.throttle.rejected}</dd><dt>Last logout</dt><dd>${fmt.dt(c.lastLogoutAt)}</dd></dl></div>
     </div>
@@ -672,19 +672,92 @@ async function pageAudit(el) {
 // ---------------------------------------------------------------------------
 // settings
 
+const SETTINGS_TESTS = {
+  'Upstox broker': ['upstox', 'Test Upstox'],
+  'Static IP & order limits': ['ip', 'Check egress IP'],
+  'Delta Exchange India (crypto)': ['delta', 'Test Delta'],
+  'AI research (OpenAI)': ['openai', 'Test OpenAI key'],
+  'Alerts & monitoring': ['telegram', 'Send test alert'],
+};
+
+function settingInput(f) {
+  const id = `set-${f.key}`;
+  if (f.type === 'secret') {
+    return html`<input id="${id}" name="${f.key}" type="password" autocomplete="off" placeholder="${f.isSet ? '•••••••• saved — leave blank to keep' : 'not set'}">
+      ${f.isSet && f.source === 'console' ? html`<label class="muted" style="font-size:12px"><input type="checkbox" data-clear="${f.key}"> remove saved value</label>` : ''}`;
+  }
+  if (f.type === 'bool') return html`<select id="${id}" name="${f.key}"><option value="true" ${raw(f.value ? 'selected' : '')}>On</option><option value="false" ${raw(!f.value ? 'selected' : '')}>Off</option></select>`;
+  if (f.type === 'select') return html`<select id="${id}" name="${f.key}">${f.options.map((o) => html`<option ${raw(String(f.value) === o ? 'selected' : '')}>${o}</option>`)}</select>`;
+  return html`<input id="${id}" name="${f.key}" type="${f.type === 'number' ? 'number' : 'text'}" ${raw(f.type === 'number' ? 'step="any"' : '')} value="${f.value ?? ''}" placeholder="${f.type === 'url' ? 'https://…' : ''}">`;
+}
+
 async function pageSettings(el) {
-  const s = await api('/api/settings');
-  el.innerHTML = html`<div class="page-head"><h1>Settings</h1></div>
-    <div class="grid g2">
+  const d = await api('/api/settings');
+  const groups = [];
+  for (const f of d.fields) {
+    let g = groups.find((x) => x.name === f.group);
+    if (!g) groups.push((g = { name: f.group, fields: [] }));
+    g.fields.push(f);
+  }
+  const srcBadge = (f) => (f.source === 'console' ? badge('saved here', 'info') : f.source === 'env' ? badge('from .env') : '');
+  el.innerHTML = html`<div class="page-head"><h1>Settings</h1><span class="spacer"></span>
+      <button class="primary" id="save-settings">Save changes</button></div>
+    <div id="restart-banner">${d.restartPending ? html`<div class="banner warn"><div class="row"><span>Saved changes take effect after a restart.</span><button class="primary sm" id="restart-btn">Apply &amp; restart now</button></div></div>` : ''}</div>
+    <div class="banner info">Everything, including API keys, is configured here: no files or code to edit. Secrets are encrypted in the database and never shown again after saving. Values saved here override <code>.env</code>. Each change is recorded in the audit log (secret values excluded).</div>
+    <form id="settings-form" class="stack" autocomplete="off">
+      ${groups.map((g) => html`<div class="card"><div class="page-head" style="margin-bottom:10px"><h2 style="margin:0">${g.name}</h2><span class="spacer"></span>
+        ${SETTINGS_TESTS[g.name] ? html`<span class="muted" data-test-result="${SETTINGS_TESTS[g.name][0]}" style="font-size:12.5px"></span><button type="button" class="sm" data-test="${SETTINGS_TESTS[g.name][0]}">${SETTINGS_TESTS[g.name][1]}</button>` : ''}</div>
+        <div class="form-grid">${g.fields.map((f) => html`<label class="field" for="set-${f.key}"><span>${f.label} ${srcBadge(f)}</span>${settingInput(f)}<span class="muted" style="font-size:11.5px">${f.help}</span></label>`)}</div></div>`)}
+    </form>
+    <div class="grid g2" style="margin-top:14px">
       <form class="card" id="pw"><h2>Change admin password</h2><div class="stack">
         <label class="field">Current<input type="password" name="current" autocomplete="current-password" required></label>
         <label class="field">New (min 12 chars)<input type="password" name="next" autocomplete="new-password" minlength="12" required></label>
         <button class="primary">Change password</button></div></form>
       <form class="card" id="reset"><h2>Reset paper account</h2><p class="secondary">Clears paper positions and restarts with fresh capital. Flatten first.</p>
-        <div class="toolbar"><input name="capital" type="number" min="1" value="${s.CAPITAL_INR}" aria-label="Capital"><button class="danger">Reset paper book</button></div></form>
+        <div class="toolbar"><input name="capital" type="number" min="1" value="${d.running.CAPITAL_INR}" aria-label="Capital"><button class="danger">Reset paper book</button></div></form>
     </div>
-    <div class="card" style="margin-top:14px"><h2>Environment (secrets redacted)</h2><p class="muted" style="margin-top:0">Static settings come from the environment / .env and require a restart. Runtime limits live under Risk & config.</p>
-      <dl class="kv">${Object.entries(s).map(([k, v]) => html`<dt class="mono">${k}</dt><dd class="mono">${String(v)}</dd>`)}</dl></div>`.__raw;
+    <p class="muted" style="font-size:12px">Database: <code>${d.dbPath}</code> (set by the <code>DB_PATH</code> environment variable). Encryption key: <code>.master.key</code> next to the database. Back it up with the database, but keep a separate copy.</p>`.__raw;
+
+  const initial = Object.fromEntries(d.fields.filter((f) => f.type !== 'secret').map((f) => [f.key, String(f.value ?? '')]));
+  const bindRestart = () => $('#restart-btn')?.addEventListener('click', () => restartApp());
+  bindRestart();
+
+  $('#save-settings').addEventListener('click', async () => {
+    const values = {};
+    for (const f of d.fields) {
+      const inp = document.getElementById(`set-${f.key}`);
+      if (!inp) continue;
+      if (f.type === 'secret') {
+        if (document.querySelector(`[data-clear="${f.key}"]`)?.checked) values[f.key] = null;
+        else if (inp.value.trim()) values[f.key] = inp.value.trim();
+        continue;
+      }
+      if (inp.value !== initial[f.key]) values[f.key] = f.type === 'bool' ? inp.value === 'true' : inp.value;
+    }
+    if (!Object.keys(values).length) return toast('No changes to save');
+    let confirmation;
+    const liveNow = (values.MODE ?? initial.MODE) === 'live' && String(values.LIVE_TRADING_ENABLED ?? initial.LIVE_TRADING_ENABLED) === 'true';
+    if (liveNow && ('MODE' in values || 'LIVE_TRADING_ENABLED' in values)) {
+      confirmation = prompt('You are switching to LIVE trading with real money. Type ENABLE LIVE to confirm:') || '';
+      if (confirmation !== 'ENABLE LIVE') return toast('Live switch not confirmed; nothing saved', true);
+    }
+    try {
+      const r = await put('/api/settings', { values, confirmation });
+      toast(r.changed.length ? `Saved ${r.changed.length} setting(s)` : 'No changes');
+      await pageSettings(el);
+    } catch (e) { toast(e.message, true); }
+  });
+
+  $$('[data-test]').forEach((b) => b.addEventListener('click', async () => {
+    const out = $(`[data-test-result="${b.dataset.test}"]`);
+    out.textContent = 'Testing… (uses saved values — save first)';
+    try {
+      const r = await post(`/api/settings/test/${b.dataset.test}`);
+      out.innerHTML = html`${r.ok ? badge('OK', 'good') : badge('Failed', 'crit')} ${r.message}`.__raw;
+    } catch (e) { out.textContent = e.message; }
+  }));
+
   $('#pw').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -696,6 +769,28 @@ async function pageSettings(el) {
     if (!confirm('Reset the paper account?')) return;
     await act(() => post('/api/paper/reset', { capital: Number(new FormData(e.target).get('capital')) }), 'Paper account reset');
   });
+}
+
+async function restartApp() {
+  if (!confirm('Restart TradeAI now to apply the saved settings? Open orders stay at the broker; the system reconciles on start.')) return;
+  let port;
+  try { port = (await post('/api/system/restart')).port; } catch (e) { return toast(e.message, true); }
+  state.es?.close();
+  const page = $('#page');
+  if (page) page.innerHTML = '<div class="empty">Restarting… this takes a few seconds.</div>';
+  const base = port && String(port) !== location.port ? `${location.protocol}//${location.hostname}:${port}` : '';
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const r = await fetch(`${base}/api/health`, { cache: 'no-store' });
+      if (r.ok && i > 1) {
+        if (base) location.href = `${base}/#/settings`;
+        else { toast('Restarted with the new settings'); boot(); }
+        return;
+      }
+    } catch { /* still restarting */ }
+  }
+  toast('Server did not come back within 60 s; check the logs', true);
 }
 
 const PAGES = {

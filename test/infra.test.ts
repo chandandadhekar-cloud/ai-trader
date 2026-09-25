@@ -123,3 +123,16 @@ test('Upstox order poller turns order-book changes into updates and fill deltas'
   assert.deepEqual(updates, ['NEW', 'PARTIALLY_FILLED', 'FILLED']);
   assert.deepEqual(fills, [{ qty: 40, price: 100 }, { qty: 60, price: 101 }]);
 });
+
+test('database migrations are idempotent across reopen', async () => {
+  const { Db } = await import('../src/db/database.ts');
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const p = join(mkdtempSync(join(tmpdir(), 'tradeai-mig-')), 'm.db');
+  new Db(p).close();
+  new Db(p).close();
+  const d = new Db(p);
+  assert.equal(d.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n, 1);
+  d.close();
+});

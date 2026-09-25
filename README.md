@@ -19,6 +19,8 @@ npm install
 npm start                       # paper mode, synthetic market, console on http://127.0.0.1:8080
 ```
 
+**All configuration happens on the Settings page.** That includes API keys (Upstox, Delta, OpenAI, Telegram), static IPs, models, limits, capital and live mode. Nothing needs editing in files or code. Secrets are encrypted in the database, every change is audited, and **Apply & restart** puts changes into effect in seconds. Test buttons check each connection. `.env` remains optional, for server deployments.
+
 On first run, an admin password is generated and written to `data/INITIAL_ADMIN_PASSWORD.txt`. Sign in, change the password under **Settings**, then delete the file. To set the password yourself, run `npm run admin:passwd -- "<password>"` and put the output in `.env` as `ADMIN_PASSWORD_HASH`.
 
 Requires **Node ≥ 22.18**. TypeScript runs natively through Node's type stripping, so there is no build step.
@@ -35,12 +37,12 @@ Requires **Node ≥ 22.18**. TypeScript runs natively through Node's type stripp
 
 ## Going from synthetic data to real data and real money
 
-1. Copy `.env.example` to `.env`. Set the Upstox API key, secret and redirect URI (`https://<host>/api/upstox/callback`), then set `DATA_SOURCE=upstox`.
+1. In **Settings → Upstox broker**, enter the API key, secret, redirect URI (`https://<host>/api/upstox/callback`) and Algo Name. Set **Market data source** to `upstox`, click **Test Upstox**, then **Apply & restart**.
 2. Complete the **daily Upstox login** from the Compliance page. Tokens expire daily and whenever the registered IP changes. The session is logged out at 23:45 IST.
 3. Surveillance files are downloaded at 08:30 IST. If the download fails, equity entries stay blocked until the files are uploaded from the Surveillance page.
 4. Keep strategies in `shadow` or `paper` and run validation backtests on stored bars (`Validation → Data: Stored bars`).
 5. Before live trading:
-   - Set `STATIC_IP_PRIMARY`/`SECONDARY` and `UPSTOX_ALGO_NAME`, then `MODE=live` and `LIVE_TRADING_ENABLED=true`.
+   - In **Settings**, set the static IPs, then switch **Mode** to `live` and turn on the **Live trading switch**. You must type `ENABLE LIVE` to confirm.
    - The Compliance page must show no blockers.
    - A strategy can only be promoted to `live` once its latest trial passes every gate, or with an audited written override.
 

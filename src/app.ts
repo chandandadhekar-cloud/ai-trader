@@ -478,6 +478,7 @@ export class App {
     this.synthetic?.stop();
     this.feed?.stop();
     this.sweeper?.stop();
+    this.upstox?.stopOrderPoller();
     this.audit.append('system', 'app.stop', null, {});
     this.db.close();
   }

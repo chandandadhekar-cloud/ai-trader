@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shopify products.json: Limits, Pagination and What It Returns</title><meta name="description" content="A practical reference to Shopify&#x27;s public /products.json storefront endpoint — default and max limit, page-based pagination, collection and single-product URLs, and why some stores return 403.">
+<link rel="canonical" href="https://REPLACE-WITH-DOMAIN/guides/shopify-products-json.html"><meta property="og:title" content="Shopify products.json: Limits, Pagination and What It Returns">
+<meta property="og:description" content="A practical reference to Shopify&#x27;s public /products.json storefront endpoint — default and max limit, page-based pagination, collection and single-product URLs, and why some stores return 403."><meta property="og:type" content="website">
+<style>
+:root{--bg:#fbfbf9;--fg:#1d1f21;--muted:#5d6166;--card:#fff;--line:#e4e4df;--accent:#0a7a52;--accent-fg:#fff;--code:#f1f1ec}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121413;--fg:#e8e8e4;--muted:#a3a7a5;--card:#1b1e1c;--line:#2c302d;--accent:#3fbf8a;--accent-fg:#0b1410;--code:#222624}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--accent)}header,main,footer{max-width:760px;margin:0 auto;padding:0 16px}
+header{display:flex;justify-content:space-between;align-items:center;padding-top:20px;gap:12px;flex-wrap:wrap}
+header a.brand{font-weight:700;color:var(--fg);text-decoration:none}nav a{margin-left:14px;color:var(--muted);text-decoration:none;font-size:15px}
+h1{font-size:clamp(28px,5vw,40px);line-height:1.2;margin:40px 0 12px}h2{margin-top:40px}.lede{font-size:19px;color:var(--muted)}
+.btn{display:inline-block;background:var(--accent);color:var(--accent-fg);padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:28px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--muted);font-size:15px}
+pre,code{background:var(--code);border-radius:6px;font-size:14px}pre{padding:12px;overflow-x:auto}code{padding:1px 4px}pre code{padding:0}
+table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;font-size:15px}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
+.note{border-left:3px solid var(--accent);padding:4px 14px;color:var(--muted)}footer{margin-top:60px;padding-bottom:40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line);padding-top:16px}
+</style><script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Shopify products.json: Limits, Pagination and What It Returns","dateModified":"2026-10-29"}</script></head><body>
+<header><a class="brand" href="/">Shopify Product Downloader</a><nav><a href="/guides/">Guides</a><a href="/privacy.html">Privacy</a><a href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&utm_medium=nav">Add to Chrome</a></nav></header>
+<main><h1>Shopify products.json: Limits, Pagination and What It Returns</h1><p class="lede">A practical reference to Shopify&#x27;s public /products.json storefront endpoint — default and max limit, page-based pagination, collection and single-product URLs, and why some stores return 403.</p><p class="note">Last tested 2026-10-29.</p><h1>Shopify products.json: Limits, Pagination and What It Returns</h1>
+<p>Every standard Shopify Online Store exposes a read-only JSON feed of its <strong>published</strong> products. It isn't the Admin API and needs no token, and it isn't the Storefront GraphQL API. It's the same data the theme renders, in JSON form.</p>
+<h2>The URLs</h2>
+<pre><code>/products.json                                  # all published products
+/products.json?limit=250&amp;page=3                 # paging
+/collections/{collection-handle}/products.json  # one collection
+/products/{product-handle}.json                 # one product (Admin-style shape)
+/products/{product-handle}.js                   # one product (theme/AJAX shape, prices in cents)
+</code></pre>
+<h2>Limits and pagination (tested 29 Oct 2026)</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Behaviour we observed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>no <code>limit</code></td>
+<td>30 products</td>
+</tr>
+<tr>
+<td><code>limit=250</code></td>
+<td>250 products</td>
+</tr>
+<tr>
+<td><code>limit=500</code></td>
+<td>still 250. <strong>250 is the cap</strong></td>
+</tr>
+<tr>
+<td><code>page=N</code></td>
+<td>1-based page number; an empty <code>products</code> array means you've reached the end</td>
+</tr>
+</tbody>
+</table>
+<p>A minimal loop in Python:</p>
+<pre><code class="language-python">import json, time, urllib.request
+
+def all_products(store):
+    page, out = 1, []
+    while True:
+        url = f&quot;{store}/products.json?limit=250&amp;page={page}&quot;
+        req = urllib.request.Request(url, headers={&quot;User-Agent&quot;: &quot;catalog-research/1.0&quot;})
+        batch = json.load(urllib.request.urlopen(req, timeout=20))[&quot;products&quot;]
+        if not batch:
+            return out
+        out += batch
+        page += 1
+        time.sleep(1)  # be polite; storefronts rate-limit aggressive clients
+</code></pre>
+<h2>What each product contains</h2>
+<p><code>id, title, handle, body_html, vendor, product_type, tags, created_at, updated_at, published_at, options, images[], variants[]</code></p>
+<p>Each variant has <code>id, title, sku, price, compare_at_price, option1–3, grams, requires_shipping, taxable, available</code> and its position.</p>
+<p><strong>Not included:</strong> inventory quantity, cost per item, metafields, sales data, unpublished or draft products.</p>
+<h2>Useful tricks</h2>
+<ul>
+<li><strong>Newest products first.</strong> Sort the results by <code>created_at</code> to see what a store launched recently.</li>
+<li><strong>Price changes.</strong> Snapshot weekly and diff <code>variants[].price</code> and <code>compare_at_price</code>.</li>
+<li><strong>Assortment by type.</strong> Group by <code>product_type</code> and <code>vendor</code>.</li>
+</ul>
+<h2>Why you get 403, 404 or HTML instead</h2>
+<ul>
+<li><strong>403.</strong> Bot protection on the store, or your request rate was too high. Stop. Don't rotate IPs or spoof browsers to get around it.</li>
+<li><strong>404 or HTML.</strong> The site may be headless (Hydrogen or another custom frontend) and not serve the Online Store routes. It may also not be on Shopify at all.</li>
+<li><strong>Only some products show up.</strong> The feed only includes products published to the Online Store sales channel.</li>
+</ul>
+<h2>Don't want to write code?</h2>
+<p><em>Disclosure: we make this.</em> <a href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&amp;utm_medium=guide">Shopify Product Downloader</a> is a free Chrome extension that does the paging for you and saves the result as a Shopify-import-ready CSV or JSON. It can also start from the store's <strong>Best Selling</strong> order.</p>
+<h2>Use the data responsibly</h2>
+<p>The feed is public, but the product photos and descriptions in it are usually copyrighted. Use it for research and analysis, not to clone listings. Keep request rates low.</p><p><a class="btn" href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&utm_medium=guide-cta">Add to Chrome (free)</a></p></main>
+<footer>Free Chrome extension for Shopify catalog research · <a href="mailto:brightgoals20@gmail.com">brightgoals20@gmail.com</a> · Not affiliated with Shopify Inc.</footer>
+</body></html>

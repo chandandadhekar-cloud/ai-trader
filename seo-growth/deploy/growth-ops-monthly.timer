@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly growth ops run (1st of month)
+
+[Timer]
+OnCalendar=*-*-01 08:05
+RandomizedDelaySec=20min
+Persistent=true
+Unit=growth-ops@monthly.service
+
+[Install]
+WantedBy=timers.target

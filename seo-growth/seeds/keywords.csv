@@ -1,0 +1,40 @@
+keyword,seed,source,first_seen,last_seen,intent,cluster,priority,target_page
+shopify product downloader,shopify product downloader,google-autocomplete,2026-10-29,2026-10-29,navigational/transactional,brand,10,CWS listing title + homepage
+shopify product downloader extension,shopify product downloader,google-autocomplete,2026-10-29,2026-10-29,transactional,brand,10,CWS listing + homepage
+shopify products downloader & analyzer pro,shopify product downloader,google-autocomplete,2026-10-29,2026-10-29,navigational,brand,6,Homepage (check if this is an old name of ours)
+shopify product export chrome extension,shopify product export,google-autocomplete,2026-10-29,2026-10-29,transactional,export,9,Homepage
+shopify product export extension,shopify product export,google-autocomplete,2026-10-29,2026-10-29,transactional,export,9,Homepage
+shopify export products extension,export shopify products,google-autocomplete,2026-10-29,2026-10-29,transactional,export,9,Homepage
+shopify product scraper chrome extension,shopify product scraper,google-autocomplete,2026-10-29,2026-10-29,transactional,scraper,9,Homepage + CWS short description
+shopify product scraper free,shopify product scraper,google-autocomplete,2026-10-29,2026-10-29,transactional,scraper,9,Homepage
+shopify scraper chrome extension,shopify scraper,google-autocomplete,2026-10-29,2026-10-29,transactional,scraper,8,Homepage
+shopify scraper free,shopify scraper,google-autocomplete,2026-10-29,2026-10-29,transactional,scraper,8,Homepage
+shopify spy extension free,shopify spy,google-autocomplete,2026-10-29,2026-10-29,transactional,spy,7,Homepage (spy section)
+shopify spy scraper extension,shopify spy,google-autocomplete,2026-10-29,2026-10-29,transactional,spy,7,Homepage
+download shopify products csv,download shopify products,google-autocomplete,2026-10-29,2026-10-29,informational/transactional,export,9,Guide: export products from any Shopify store
+export shopify products to csv,export shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,export,8,Guide: export products from any Shopify store
+shopify product export csv,shopify product export,google-autocomplete,2026-10-29,2026-10-29,informational,export,7,Guide: export products from any Shopify store
+export shopify products with images,export shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,export,6,Guide: export products (images section)
+download shopify product images,download shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,export,5,Guide: export products (images section) - only claim what extension exports (image URLs)
+shopify download product list,download shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,export,6,Guide: export products from any Shopify store
+shopify products.json,shopify products.json,google-autocomplete,2026-10-29,2026-10-29,informational (technical),products-json,7,Guide: Shopify products.json explained
+shopify products json pagination,shopify products.json,google-autocomplete,2026-10-29,2026-10-29,informational (technical),products-json,6,Guide: Shopify products.json explained
+shopify products.json limit,shopify products.json,google-autocomplete,2026-10-29,2026-10-29,informational (technical),products-json,6,Guide: Shopify products.json explained
+shopify all products json,shopify products.json,google-autocomplete,2026-10-29,2026-10-29,informational (technical),products-json,5,Guide: Shopify products.json explained
+shopify best sellers url,shopify best sellers,google-autocomplete,2026-10-29,2026-10-29,informational,best-sellers,8,Guide: find a Shopify store's best sellers
+shopify best selling url,shopify best sellers,google-autocomplete,2026-10-29,2026-10-29,informational,best-sellers,7,Guide: find a Shopify store's best sellers
+shopify best sellers link,shopify best sellers,google-autocomplete,2026-10-29,2026-10-29,informational,best-sellers,6,Guide: find a Shopify store's best sellers
+shopify theme detector,shopify theme detector,google-autocomplete,2026-10-29,2026-10-29,transactional,theme-app-detect,6,Guide: see a Shopify store's theme and apps (high competition: PageFly/Avada/Meetanshi tools)
+shopify theme detector extension,shopify theme detector,google-autocomplete,2026-10-29,2026-10-29,transactional,theme-app-detect,6,Guide: theme and apps
+shopify app detector extension,shopify app detector,google-autocomplete,2026-10-29,2026-10-29,transactional,theme-app-detect,6,Guide: theme and apps
+shopify app detector free,shopify app detector,google-autocomplete,2026-10-29,2026-10-29,transactional,theme-app-detect,5,Guide: theme and apps
+shopify store analyzer extension,shopify store analyzer,google-autocomplete,2026-10-29,2026-10-29,transactional,analyzer,7,Homepage
+shopify store analyzer free,shopify store analyzer,google-autocomplete,2026-10-29,2026-10-29,transactional,analyzer,6,Homepage
+shopify store analysis extension,shopify store analyzer,google-autocomplete,2026-10-29,2026-10-29,transactional,analyzer,6,Homepage
+shopify competitor research,shopify competitor analysis,google-autocomplete,2026-10-29,2026-10-29,informational,research,6,Guide: Shopify competitor research workflow
+shopify store competitor analysis,shopify competitor analysis,google-autocomplete,2026-10-29,2026-10-29,informational,research,6,Guide: Shopify competitor research workflow
+free shopify product research tool,shopify product research,google-autocomplete,2026-10-29,2026-10-29,commercial,research,5,Guide: competitor research (very competitive head term)
+copy products from one shopify store to another,copy products from shopify store,google-autocomplete,2026-10-29,2026-10-29,informational,migration,5,"Guide: export products (own-store migration = native admin export; be honest)"
+import products from one shopify store to another,import products from another shopify store,google-autocomplete,2026-10-29,2026-10-29,informational,migration,5,Guide: export products (migration section)
+export shopify products to woocommerce,export shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,migration,3,Not targeted - unverified that our CSV maps to WooCommerce
+export shopify products to etsy,export shopify products,google-autocomplete,2026-10-29,2026-10-29,informational,migration,2,Not targeted

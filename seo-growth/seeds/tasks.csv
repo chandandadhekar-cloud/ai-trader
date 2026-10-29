@@ -1,0 +1,13 @@
+id,objective,priority,status,log,evidence,failure_reason,next_action,updated
+T-001,"Ship compliance release (remove Amazon tag injection, remove browsing-history/search/tab collection, de-obfuscate, trim permissions, update privacy disclosures)",10,blocked-owner,"2026-10-29: found by unpacking v5.0.2 CRX","reports/00-compliance-blockers.md",,"Owner/developer changes extension source and publishes v5.0.3; then re-run reports/00 checklist",2026-10-29
+T-002,Environment audit,9,done,"Cloud container; Python 3.13, Node 22, SQLite 3.45, Chromium/Playwright, outbound HTTPS via proxy; no crontab; ephemeral disk (git is the only persistence)",README.md#environment,,,2026-10-29
+T-003,Product audit of live listing + package,9,done,"Listing fetched; 756 users, 5.0 (5 ratings), v5.0.2 updated May 4 2026",reports/01-product-audit.md,,,2026-10-29
+T-004,Competitor research,8,done,"5 competitor listings snapshotted",reports/02-competitors.md,,Weekly job re-snapshots,2026-10-29
+T-005,Keyword research + map,8,done,"39 autocomplete-derived keywords mapped to pages",seeds/keywords.csv; reports/03-strategy.md,,Weekly job expands,2026-10-29
+T-006,Build 50+ prospect list,8,done,"60 prospects (55 actionable, 5 competitor references)",seeds/prospects.csv,,,2026-10-29
+T-007,Write 3 SEO guides,7,done-draft,"Drafts written; not published",content/guides/,,Publish on own site after T-001 + T-008,2026-10-29
+T-008,Create owned website (landing + guides + privacy),9,needs-approval,"Static site built in site/",site/,,"Owner approves hosting (GitHub Pages / Cloudflare Pages, free) and domain; add as homepage URL in CWS listing",2026-10-29
+T-009,Listing optimization (title/summary/description/screenshots),8,needs-approval,"Copy drafted",reports/01-product-audit.md#listing-copy,,Owner edits in CWS Developer Dashboard after T-001,2026-10-29
+T-010,Outreach batch 1 (Do Dropshipping + 2 others),7,blocked,"Drafts in outreach/",outreach/,Blocked by T-001,Send from brightgoals20@gmail.com after owner approval,2026-10-29
+T-011,Directory submissions (AlternativeTo / SaaSHub / Edge Add-ons),7,blocked,"Copy ready",outreach/10-directory-copy.md,Blocked by T-001 + needs owner logins,Owner logs in; Claude can fill forms with copy,2026-10-29
+T-012,Recurring monitoring jobs,6,done,"growth.py run daily/weekly/monthly + systemd timers + cron file",deploy/,,Install on VPS (README),2026-10-29

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily growth ops run
+
+[Timer]
+OnCalendar=*-*-* 06:20
+RandomizedDelaySec=20min
+Persistent=true
+Unit=growth-ops@daily.service
+
+[Install]
+WantedBy=timers.target

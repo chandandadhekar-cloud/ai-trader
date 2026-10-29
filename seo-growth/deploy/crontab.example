@@ -1,0 +1,6 @@
+# Alternative to the systemd timers (use one or the other, not both).
+# growth.py takes its own non-blocking lock, and flock + timeout add a second guard.
+GROWTH_HOME=/opt/seo-growth
+20 6 * * *  flock -n /opt/seo-growth/var/cron.lock timeout 30m python3 /opt/seo-growth/growth.py run daily   >> /opt/seo-growth/var/logs/cron.log 2>&1
+10 7 * * 1  flock -w 1800 /opt/seo-growth/var/cron.lock timeout 30m python3 /opt/seo-growth/growth.py run weekly  >> /opt/seo-growth/var/logs/cron.log 2>&1
+5  8 1 * *  flock -w 1800 /opt/seo-growth/var/cron.lock timeout 30m python3 /opt/seo-growth/growth.py run monthly >> /opt/seo-growth/var/logs/cron.log 2>&1

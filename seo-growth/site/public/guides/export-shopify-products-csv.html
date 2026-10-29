@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How to Export Products from Any Shopify Store to CSV (3 Methods)</title><meta name="description" content="Export a Shopify product catalog to CSV — from your own admin, from any public store&#x27;s products.json, or with a free Chrome extension. Tested methods, limits and pitfalls.">
+<link rel="canonical" href="https://REPLACE-WITH-DOMAIN/guides/export-shopify-products-csv.html"><meta property="og:title" content="How to Export Products from Any Shopify Store to CSV (3 Methods)">
+<meta property="og:description" content="Export a Shopify product catalog to CSV — from your own admin, from any public store&#x27;s products.json, or with a free Chrome extension. Tested methods, limits and pitfalls."><meta property="og:type" content="website">
+<style>
+:root{--bg:#fbfbf9;--fg:#1d1f21;--muted:#5d6166;--card:#fff;--line:#e4e4df;--accent:#0a7a52;--accent-fg:#fff;--code:#f1f1ec}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121413;--fg:#e8e8e4;--muted:#a3a7a5;--card:#1b1e1c;--line:#2c302d;--accent:#3fbf8a;--accent-fg:#0b1410;--code:#222624}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.65 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--accent)}header,main,footer{max-width:760px;margin:0 auto;padding:0 16px}
+header{display:flex;justify-content:space-between;align-items:center;padding-top:20px;gap:12px;flex-wrap:wrap}
+header a.brand{font-weight:700;color:var(--fg);text-decoration:none}nav a{margin-left:14px;color:var(--muted);text-decoration:none;font-size:15px}
+h1{font-size:clamp(28px,5vw,40px);line-height:1.2;margin:40px 0 12px}h2{margin-top:40px}.lede{font-size:19px;color:var(--muted)}
+.btn{display:inline-block;background:var(--accent);color:var(--accent-fg);padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:28px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--muted);font-size:15px}
+pre,code{background:var(--code);border-radius:6px;font-size:14px}pre{padding:12px;overflow-x:auto}code{padding:1px 4px}pre code{padding:0}
+table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;font-size:15px}th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
+.note{border-left:3px solid var(--accent);padding:4px 14px;color:var(--muted)}footer{margin-top:60px;padding-bottom:40px;color:var(--muted);font-size:14px;border-top:1px solid var(--line);padding-top:16px}
+</style><script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"How to Export Products from Any Shopify Store to CSV (3 Methods)","dateModified":"2026-10-29"}</script></head><body>
+<header><a class="brand" href="/">Shopify Product Downloader</a><nav><a href="/guides/">Guides</a><a href="/privacy.html">Privacy</a><a href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&utm_medium=nav">Add to Chrome</a></nav></header>
+<main><h1>How to Export Products from Any Shopify Store to CSV (3 Methods)</h1><p class="lede">Export a Shopify product catalog to CSV — from your own admin, from any public store&#x27;s products.json, or with a free Chrome extension. Tested methods, limits and pitfalls.</p><p class="note">Last tested 2026-10-29.</p><h1>How to Export Products from Any Shopify Store to CSV (3 Methods)</h1>
+<p>There are two very different situations behind "export Shopify products":</p>
+<ul>
+<li><strong>It's your store.</strong> Use Shopify's built-in export (Method 1). It's free, complete and includes data no outside tool can see, such as inventory and cost.</li>
+<li><strong>It's someone else's store</strong> (a competitor, a supplier, a client who hasn't given you admin access yet). You can only see what the store publishes. Methods 2 and 3 read that public data.</li>
+</ul>
+<p>Pick your situation below.</p>
+<h2>Method 1: Your own store (Shopify admin)</h2>
+<ol>
+<li>In Shopify admin, open <strong>Products</strong>.</li>
+<li>Click <strong>Export</strong>.</li>
+<li>Choose <strong>Current page</strong>, <strong>All products</strong>, <strong>Selected products</strong>, or <strong>products matching your search</strong>.</li>
+<li>Choose <strong>CSV for Excel, Numbers, or other spreadsheet programs</strong>, or <strong>Plain CSV file</strong>. Use plain CSV if you'll re-import it into Shopify.</li>
+<li>Click <strong>Export products</strong>. Small exports download immediately. Large ones are emailed to the account owner as a download link.</li>
+</ol>
+<p><strong>Moving products between two stores you own?</strong> Export from store A and import into store B (<strong>Products › Import</strong>). You don't need a third-party tool. Collections, metaobjects and theme files don't travel in the product CSV. Those need a migration app.</p>
+<h2>Method 2: Any public store, by hand (products.json)</h2>
+<p>Most Shopify storefronts publish a read-only product feed at <code>/products.json</code>. We tested this on several stores on 29 Oct 2026:</p>
+<table>
+<thead>
+<tr>
+<th>Request</th>
+<th>What you get</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>https://store.com/products.json</code></td>
+<td>30 products (the default)</td>
+</tr>
+<tr>
+<td><code>https://store.com/products.json?limit=250</code></td>
+<td>250 products, the maximum per request (<code>limit=500</code> still returns 250)</td>
+</tr>
+<tr>
+<td><code>https://store.com/products.json?limit=250&amp;page=2</code></td>
+<td>the next 250</td>
+</tr>
+<tr>
+<td><code>https://store.com/collections/&lt;handle&gt;/products.json</code></td>
+<td>only that collection</td>
+</tr>
+<tr>
+<td><code>https://store.com/products/&lt;handle&gt;.json</code></td>
+<td>one product</td>
+</tr>
+</tbody>
+</table>
+<p>Keep increasing <code>page</code> until you get an empty <code>"products": []</code>.</p>
+<p><strong>What's in it:</strong> title, description HTML, vendor, product type, tags, created/updated/published dates, and every variant (SKU, price, compare-at price, option values, weight, availability flag). Image URLs are included too.
+<strong>What's not in it:</strong> inventory quantities, cost, sales numbers, metafields, and unpublished products.</p>
+<p><strong>Turning JSON into CSV.</strong> For a few pages you can paste the JSON into a converter or open it in Google Sheets with a script. For a catalog of 2,000+ products this gets tedious, and each variant has to become its own row to match Shopify's import format. That's where Method 3 saves time.</p>
+<p><strong>When it doesn't work.</strong> Some stores return <code>403</code> (bot protection) or aren't on the standard Shopify storefront at all; headless Hydrogen sites, for example, don't have it. In our test, one large store returned 403 for every request. No tool should try to get around that.</p>
+<h2>Method 3: Any public store, in a few clicks (Chrome extension)</h2>
+<p><em>Disclosure: we make this extension.</em></p>
+<p><a href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&amp;utm_medium=guide">Shopify Product Downloader</a> reads the same public feed as Method 2 and turns it into a file for you:</p>
+<ol>
+<li>Install the extension and open it.</li>
+<li>Paste the store URL and click <strong>Add Store</strong>.</li>
+<li>On the <strong>Products</strong> tab, choose a collection, <strong>All Products</strong>, or <strong>Best Selling</strong>.</li>
+<li>Choose <strong>Shopify – CSV</strong> (import-ready) or <strong>Shopify – JSON</strong>, then click <strong>Download</strong>.</li>
+</ol>
+<p>It also has a <strong>Store Analyser</strong> tab (theme and apps, an SEO score, collection and content analytics) if you're researching the store, not just copying a catalog.</p>
+<p>Other free options exist as well. Shopify Spy (Scraper &amp; Parser) and "Free Shopify Product Scraper &amp; Exporter" are both on the Chrome Web Store. Compare their export limits before you choose, because some free tiers cap at 100–500 rows.</p>
+<h2>Before you import someone else's products</h2>
+<ul>
+<li><strong>Product photos and descriptions are almost always copyrighted</strong> by the brand or store. Use exports for research, such as pricing, assortment, variants and launch timing. Write your own copy and use your own photos or ones your supplier licenses to you.</li>
+<li>If you're dropshipping a supplier's products, ask the supplier for their official catalog CSV. It's usually more complete than any public export.</li>
+<li>Shopify's product import accepts CSV files up to 15 MB. Split bigger files.</li>
+</ul>
+<h2>FAQ</h2>
+<p><strong>Can I export a Shopify store's sales or inventory?</strong> No. Those aren't public. Tools that show "revenue" are estimating it.</p>
+<p><strong>Can I export product images?</strong> The export includes image URLs. Shopify's importer downloads images from those URLs when you import, but see the copyright note above.</p>
+<p><strong>Why does my export have more rows than products?</strong> Shopify's CSV format uses one row per variant. A t-shirt in 3 sizes × 2 colours is 6 rows.</p><p><a class="btn" href="https://chromewebstore.google.com/detail/shopify-product-downloade/ccbmjjcmoaiiebhodnmjekhbmgcakjhb?utm_source=website&utm_medium=guide-cta">Add to Chrome (free)</a></p></main>
+<footer>Free Chrome extension for Shopify catalog research · <a href="mailto:brightgoals20@gmail.com">brightgoals20@gmail.com</a> · Not affiliated with Shopify Inc.</footer>
+</body></html>

@@ -1,0 +1,6 @@
+id,topic,target_keyword,status,platform,file_path,published_url,promotion_status,results,updated
+5,3-minute demo video script,how to export shopify products,draft,YouTube,content/video-script.md,,not-started,,2026-10-29
+1,How to export products from any Shopify store to CSV,download shopify products csv,draft,own site (pending),content/guides/export-shopify-products-csv.md,,not-started,,2026-10-29
+3,How to find a Shopify store's best-selling products (and its theme and apps),shopify best sellers url,draft,own site (pending),content/guides/shopify-best-sellers-theme-apps.md,,not-started,,2026-10-29
+2,Shopify products.json explained (limits and pagination),shopify products.json,draft,own site (pending),content/guides/shopify-products-json.md,,not-started,,2026-10-29
+4,Social posts pack,n/a,draft,LinkedIn / X / Reddit,content/social-posts.md,,not-started,,2026-10-29

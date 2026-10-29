@@ -1,0 +1,20 @@
+# Runs one growth job: growth-ops@daily / @weekly / @monthly. Read-only web research + local reports.
+# It never sends email, posts, or submits forms.
+[Unit]
+Description=SEO growth ops (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=growthops
+WorkingDirectory=/opt/seo-growth
+Environment=GROWTH_HOME=/opt/seo-growth
+ExecStart=/usr/bin/python3 /opt/seo-growth/growth.py run %i
+TimeoutStartSec=30min
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/seo-growth
+PrivateTmp=true
